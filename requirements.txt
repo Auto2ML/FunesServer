@@ -1,0 +1,7 @@
+gradio
+sentence-transformers
+psycopg2
+ollama
+PyPDF2
+beautifulsoup4
+docling
