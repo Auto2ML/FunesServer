@@ -109,7 +109,7 @@ class DualMemoryManager:
             ]
             
             # Get LLM response
-            response = ollama.chat(model='gemma3:1b', messages=messages)
+            response = ollama.chat(model='llama3.2:latest', messages=messages)
             llm_response = response['message']['content']
             
             # Store in both memory systems
