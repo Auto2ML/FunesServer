@@ -1,23 +1,57 @@
-# Funes: Enhanced LLM Memory System
+# Funes: Enhanced LLM Memory System with RAG Pipeline
 
 ## Overview
 
-Funes is a system that enhances local Large Language Models with persistent memory capabilities, inspired by Jorge Luis Borges' short story "Funes the Memorious" (Funes el Memorioso). Just as the character Funes possessed an infinite capacity for memory, this system extends an LLM's capabilities by providing external memory storage through PostgreSQL.
+Funes is a system that enhances local Large Language Models with persistent memory capabilities and a Retrieval-Augmented Generation (RAG) pipeline, inspired by Jorge Luis Borges' short story "Funes the Memorious" (Funes el Memorioso). Just as the character Funes remembered everything he experienced, our system provides local LLMs with a persistent and contextually relevant memory system.
 
-The system integrates with Ollama for local LLM execution while maintaining a persistent memory of previous interactions and knowledge in a PostgreSQL database.
+The system integrates with Ollama for local LLM execution while maintaining a persistent memory of previous interactions and knowledge in a PostgreSQL database with vector storage capabilities for semantic search.
 
 ## Prerequisites
 
-- Python 3.8 or higher
-- PostgreSQL 13.0 or higher
-- Ollama (for running local LLMs)
-- Basic familiarity with terminal/command line operations
+- Linux-based system (Ubuntu/Debian recommended)
+- Sudo privileges (non-root user)
+- Internet connection for downloading dependencies
 
-## Detailed Installation Guide
+## Quick Installation
+
+The entire installation process has been simplified with a bash script that handles all the necessary setup:
+
+```bash
+# Clone the repository
+git clone https://github.com/Auto2ML/FunesServer.git
+cd FunesServer
+
+# Make the install script executable
+chmod +x install.sh
+
+# Run the installation script
+./install.sh
+```
+
+The installation script automatically:
+- Installs system dependencies
+- Sets up Ollama
+- Configures PostgreSQL with pgvector extension
+- Creates the required database and user
+- Sets up Python virtual environment
+- Downloads the required LLM models
+- Creates a launcher script for easy execution
+
+## Running Funes
+
+After installation, you can run Funes with the provided launcher script:
+
+```bash
+./run_funes.sh
+```
+
+The Gradio interface will be available at `http://localhost:7860`
+
+## Manual Installation (Alternative)
+
+If you prefer to install components manually, follow these steps:
 
 ### 1. Install Ollama
-
-First, you need to install Ollama to run the LLM locally. Visit [Ollama's official website](https://ollama.ai) and follow the installation instructions for your operating system:
 
 ```bash
 # For macOS/Linux (using curl)
@@ -27,118 +61,66 @@ curl -fsSL https://ollama.ai/install.sh | sh
 # Download the installer from https://ollama.ai/download
 ```
 
-### 2. Clone the Repository
+### 2. PostgreSQL Setup with pgvector
 
 ```bash
-git clone https://github.com/yourusername/funes.git
-cd funes
-```
+# Install PostgreSQL and development libraries
+sudo apt update
+sudo apt install postgresql postgresql-contrib postgresql-server-dev-all
 
-### 3. Set Up Python Environment
-
-```bash
-# Create a virtual environment
-python3 -m venv venv
-
-# Activate the virtual environment
-# On Linux/macOS:
-source venv/bin/activate
-# On Windows:
-venv\Scripts\activate
-
-# Install required packages
-pip install -r requirements.txt
-```
-
-### 4. PostgreSQL Setup
-
-#### Install PostgreSQL:
-- **Ubuntu/Debian:**
-  ```bash
-  sudo apt update
-  sudo apt install postgresql postgresql-contrib
-  ```
-- **macOS (using Homebrew):**
-  ```bash
-  brew install postgresql
-  ```
-- **Windows:** Download and install from [PostgreSQL website](https://www.postgresql.org/download/windows/)
-
-#### Configure Database:
-```bash
-# Start PostgreSQL service
-# Linux:
-sudo service postgresql start
-# macOS:
-brew services start postgresql
-# Windows: PostgreSQL is installed as a service and should start automatically
-
-# Create database and user
-sudo -u postgres psql
-
-postgres=# CREATE DATABASE funes;
-postgres=# CREATE USER llm WITH PASSWORD 'llm';
-postgres=# GRANT ALL PRIVILEGES ON DATABASE funes TO llm;
-postgres=# \q
-```
-
-### Install pgvector (vector database extension for Postgres)
-
-```bash
-sudo apt-get install postgresql-server-dev-all
-```
-
-If you are a Windows user, you can download the PostgreSQL installer from the official website.
-
-#### Clone the pgvector GitHub repository
-
-```bash
+# Install pgvector
 git clone https://github.com/pgvector/pgvector.git
-```
-
-#### Build and install the pgvector extension:
-
-```bash
 cd pgvector
 make
 sudo make install
+
+# Create database and user
+sudo -u postgres psql
+postgres=# CREATE DATABASE funes;
+postgres=# CREATE USER llm WITH PASSWORD 'llm';
+postgres=# GRANT ALL PRIVILEGES ON DATABASE funes TO llm;
+postgres=# \c funes
+postgres=# CREATE EXTENSION vector;
+postgres=# \q
 ```
 
-If you are a Windows user, ensure you have C++ support in Visual Studio Code installed. The official installation documentation provides a step-by-step process.
-
-#### Connect to your PostgreSQL database
-
-You have several options for connecting and interacting with the PostgreSQL database: pgAdmin is one of the most commonly used interfaces. Alternatively, you can use pSQL (PostgreSQL command line interface) or even a VS Code extension for PostgreSQL.
-
-#### After connecting to your PostgreSQL database, create the extension:
+### 3. Python Environment Setup
 
 ```bash
-CREATE EXTENSION vector;
+# Create a virtual environment
+python3 -m venv funes-env
+source funes-env/bin/activate
+
+# Install required packages
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-### 5. Environment Configuration
+### 4. Environment Configuration
 
 Create a `.env` file in the project root:
 
 ```plaintext
 DATABASE_URL=postgresql://llm:llm@localhost:5432/funes
-OLLAMA_BASE_URL=http://localhost:11434
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=llm
+POSTGRES_PASSWORD=llm
+POSTGRES_DB=funes
+OLLAMA_HOST=localhost
+OLLAMA_PORT=11434
 ```
 
-### 6. Initialize Ollama 
-### HERE WE NEED TO ADD THE FINAL LIST OF MODELS USED BY FUNES
+## Funes RAG Architecture
 
-#### Start ollama server
-ollama serve
+Funes implements a Retrieval-Augmented Generation (RAG) pipeline that enhances LLM capabilities by:
 
+1. **Embedding Storage**: Converting previous conversations and knowledge into vector embeddings stored in PostgreSQL using pgvector
+2. **Semantic Retrieval**: Finding contextually relevant information from past conversations using vector similarity search
+3. **Context Enhancement**: Augmenting LLM prompts with retrieved context to provide more informed responses
+4. **Persistent Memory**: Maintaining knowledge across sessions for continuous learning and improvement
 
-### 7. Start the Application
-
-```bash
-python Funes.py
-```
-
-The Gradio interface will be available at `http://localhost:7860`
+This architecture allows Funes to provide more accurate, contextual responses based on conversation history and stored knowledge.
 
 ## Usage
 
@@ -147,6 +129,7 @@ The Gradio interface will be available at `http://localhost:7860`
    - A chat interface for interacting with the LLM
    - Memory management options
    - Context visualization tools
+   - RAG pipeline configuration
 
 ## Troubleshooting
 
@@ -155,10 +138,7 @@ The Gradio interface will be available at `http://localhost:7860`
 1. **PostgreSQL Connection Issues:**
    - Verify PostgreSQL is running:
      ```bash
-     # Linux
-     sudo service postgresql status
-     # macOS
-     brew services list
+     sudo systemctl status postgresql
      ```
    - Check database credentials in `.env`
 
@@ -167,7 +147,7 @@ The Gradio interface will be available at `http://localhost:7860`
      ```bash
      ollama list
      ```
-   - Verify the OLLAMA_BASE_URL in `.env`
+   - Verify the OLLAMA_HOST and OLLAMA_PORT in `.env`
 
 3. **Python Dependencies:**
    - If you encounter module not found errors:
@@ -186,5 +166,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - Inspired by Jorge Luis Borges' "Funes the Memorious"
-- Built with Ollama, PostgreSQL, and Gradio
+- Built with Ollama, PostgreSQL, pgvector, and Gradio
 - Special thanks to the open-source community
