@@ -4,22 +4,21 @@ import threading
 import queue
 from collections import deque
 from datetime import datetime, timedelta
-from sentence_transformers import SentenceTransformer
-import ollama
 from database import DatabaseManager
+from llm_handler import LLMHandler
+from config import MEMORY_CONFIG, DB_CONFIG
 
 class DualMemoryManager:
-    def __init__(self, short_term_capacity=10, short_term_ttl_minutes=30):
-        # Database connection parameters
-        self.db_params = {
-            'dbname': 'funes',
-            'user': 'llm',
-            'password': 'llm',
-            'host': 'localhost'
-        }
+    def __init__(self, short_term_capacity=None, short_term_ttl_minutes=None):
+        # Use config values with optional overrides
+        self.db_params = DB_CONFIG
         
-        # Initialize embedding model
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Get memory settings from config with optional overrides
+        short_term_capacity = short_term_capacity or MEMORY_CONFIG['short_term_capacity']
+        short_term_ttl_minutes = short_term_ttl_minutes or MEMORY_CONFIG['short_term_ttl_minutes']
+        
+        # Initialize LLM handler
+        self.llm_handler = LLMHandler()
         
         # Short-term memory setup
         self.short_term_memory = deque(maxlen=short_term_capacity)
@@ -53,12 +52,13 @@ class DualMemoryManager:
     
     def store_memory(self, context, source='chat'):
         """Store memory in long-term storage (PostgreSQL)"""
-        embedding = self.embedding_model.encode(context)
+        embedding = self.llm_handler.get_embeddings(context)
         self.db_manager.insert_memory(context, embedding, source)
     
-    def retrieve_relevant_memories(self, query, top_k=3):
+    def retrieve_relevant_memories(self, query, top_k=None):
         """Retrieve relevant memories from long-term storage"""
-        query_embedding = self.embedding_model.encode(query)
+        top_k = top_k or MEMORY_CONFIG['default_top_k']
+        query_embedding = self.llm_handler.get_embeddings(query)
         return self.db_manager.retrieve_memories(query_embedding.tolist(), top_k)
  
     def _build_context(self, user_message):
@@ -84,7 +84,7 @@ class DualMemoryManager:
         """Process chat with both short-term and long-term memory"""
         try:
             # Retrieve relevant memories from long-term storage
-            query_embedding = self.embedding_model.encode(user_message)
+            query_embedding = self.llm_handler.get_embeddings(user_message)
             relevant_memories = self.db_manager.retrieve_memories(query_embedding.tolist(), top_k=2)
             
             # Build context from both short-term and long-term memory
@@ -96,21 +96,8 @@ class DualMemoryManager:
                 for memory in relevant_memories:
                     context += f"- {memory[0]}\n"
             
-            # Prepare messages for LLM
-            messages = [
-                {
-                    'role': 'system',
-                    'content': "You are Funes, a helpful assistant. Use your recent conversation history and relevant memories stored in your databas to provide more informed and consistent responses, only if it is relevant for the conversation. Do not repeat unnecesary information. If you don't find relevant information in history or memories, use your training data"
-                },
-                {
-                    'role': 'user',
-                    'content': f"{context}\n\nCurrent user message: {user_message}"
-                }
-            ]
-            
-            # Get LLM response
-            response = ollama.chat(model='llama3.2:latest', messages=messages)
-            llm_response = response['message']['content']
+            # Get LLM response using the LLM handler
+            llm_response = self.llm_handler.generate_response(context, user_message)
             
             # Store in both memory systems
             self._add_to_short_term('user', user_message)
