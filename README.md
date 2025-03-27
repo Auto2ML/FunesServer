@@ -4,7 +4,7 @@
 
 Funes is a system that enhances local Large Language Models with persistent memory capabilities and a Retrieval-Augmented Generation (RAG) pipeline, inspired by Jorge Luis Borges' short story "Funes the Memorious" (Funes el Memorioso). Just as the character Funes remembered everything he experienced, our system provides local LLMs with a persistent and contextually relevant memory system.
 
-The system integrates with Ollama for local LLM execution while maintaining a persistent memory of previous interactions and knowledge in a PostgreSQL database with vector storage capabilities for semantic search.
+The system supports multiple LLM backends including Ollama, llama.cpp, and HuggingFace, while maintaining a persistent memory of previous interactions and knowledge in a PostgreSQL database with vector storage capabilities for semantic search.
 
 ## Prerequisites
 
@@ -30,7 +30,7 @@ chmod +x install.sh
 
 The installation script automatically:
 - Installs system dependencies
-- Sets up Ollama
+- Sets up LLM backends (Ollama, required libraries for llama.cpp and HuggingFace)
 - Configures PostgreSQL with pgvector extension
 - Creates the required database and user
 - Sets up Python virtual environment
@@ -46,6 +46,49 @@ After installation, you can run Funes with the provided launcher script:
 ```
 
 The Gradio interface will be available at `http://localhost:7860`
+
+## Configuration
+
+Funes can be configured through the `config.py` file to use different LLM backends and models:
+
+```python
+# LLM model configuration
+LLM_CONFIG = {
+    'model_name': 'llama3.2:latest',         # The model name or path
+    'backend_type': 'ollama',                # Options: 'ollama', 'llamacpp', 'huggingface'
+    'system_prompt': "You are Funes..."      # System prompt for the LLM
+}
+
+# Embedding model configuration
+EMBEDDING_CONFIG = {
+    'model_name': 'all-MiniLM-L6-v2',        # Embedding model name
+}
+```
+
+### LLM Backend Options:
+
+1. **Ollama Backend**:
+   - Set `'backend_type': 'ollama'`
+   - Use any model available in Ollama for `model_name`
+
+2. **llama.cpp Backend**:
+   - Set `'backend_type': 'llamacpp'`
+   - For `model_name`, provide the path to your GGUF model file
+
+3. **HuggingFace Backend**:
+   - Set `'backend_type': 'huggingface'`
+   - Use any model identifier from HuggingFace for `model_name`
+
+### Memory Configuration:
+
+```python
+# Memory configuration
+MEMORY_CONFIG = {
+    'short_term_capacity': 10,               # Number of messages to keep in short-term memory
+    'short_term_ttl_minutes': 30,            # Time-to-live for short-term memory items
+    'default_top_k': 3                       # Default number of relevant memories to retrieve
+}
+```
 
 ## Manual Installation (Alternative)
 
@@ -115,10 +158,13 @@ OLLAMA_PORT=11434
 
 Funes implements a Retrieval-Augmented Generation (RAG) pipeline that enhances LLM capabilities by:
 
-1. **Embedding Storage**: Converting previous conversations and knowledge into vector embeddings stored in PostgreSQL using pgvector
-2. **Semantic Retrieval**: Finding contextually relevant information from past conversations using vector similarity search
-3. **Context Enhancement**: Augmenting LLM prompts with retrieved context to provide more informed responses
-4. **Persistent Memory**: Maintaining knowledge across sessions for continuous learning and improvement
+1. **Dual Memory System**: 
+   - Short-term memory for recent conversation context
+   - Long-term memory stored as vector embeddings in PostgreSQL
+2. **Embedding Storage**: Converting previous conversations and knowledge into vector embeddings stored in PostgreSQL using pgvector
+3. **Semantic Retrieval**: Finding contextually relevant information from past conversations using vector similarity search
+4. **Context Enhancement**: Augmenting LLM prompts with retrieved context to provide more informed responses
+5. **Persistent Memory**: Maintaining knowledge across sessions for continuous learning and improvement
 
 This architecture allows Funes to provide more accurate, contextual responses based on conversation history and stored knowledge.
 
@@ -140,20 +186,27 @@ This architecture allows Funes to provide more accurate, contextual responses ba
      ```bash
      sudo systemctl status postgresql
      ```
-   - Check database credentials in `.env`
+   - Check database credentials in `config.py`
 
-2. **Ollama Connection:**
-   - Ensure Ollama is running:
+2. **LLM Backend Connection:**
+   - For Ollama backend:
      ```bash
      ollama list
      ```
-   - Verify the OLLAMA_HOST and OLLAMA_PORT in `.env`
+   - For llama.cpp: Ensure the model path in `config.py` is correct
+   - For HuggingFace: Verify internet connection or local model availability
 
 3. **Python Dependencies:**
    - If you encounter module not found errors:
      ```bash
      pip install -r requirements.txt --upgrade
      ```
+
+4. **Model Behavior Issues:**
+   - If the model seems to be "talking to itself" or duplicating context, try:
+     - Clearing the conversation history
+     - Checking your `config.py` settings
+     - Verifying that your LLM model is properly installed
 
 ## Contributing
 
@@ -166,5 +219,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - Inspired by Jorge Luis Borges' "Funes the Memorious"
-- Built with Ollama, PostgreSQL, pgvector, and Gradio
+- Built with PostgreSQL, pgvector, and Gradio
+- Supports multiple LLM backends: Ollama, llama.cpp, and HuggingFace
 - Special thanks to the open-source community
