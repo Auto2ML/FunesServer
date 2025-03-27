@@ -5,3 +5,7 @@ ollama
 PyPDF2
 beautifulsoup4
 docling
+transformers
+torch
+llama-cpp-python
+requests

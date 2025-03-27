@@ -52,14 +52,14 @@ class DualMemoryManager:
     
     def store_memory(self, context, source='chat'):
         """Store memory in long-term storage (PostgreSQL)"""
-        embedding = self.llm_handler.get_embeddings(context)
+        embedding = self.llm_handler.get_single_embedding(context)
         self.db_manager.insert_memory(context, embedding, source)
     
     def retrieve_relevant_memories(self, query, top_k=None):
         """Retrieve relevant memories from long-term storage"""
         top_k = top_k or MEMORY_CONFIG['default_top_k']
-        query_embedding = self.llm_handler.get_embeddings(query)
-        return self.db_manager.retrieve_memories(query_embedding.tolist(), top_k)
+        query_embedding = self.llm_handler.get_single_embedding(query)
+        return self.db_manager.retrieve_memories(query_embedding, top_k)
  
     def _build_context(self, user_message):
         """Build context from both short-term and long-term memory"""
@@ -83,21 +83,31 @@ class DualMemoryManager:
     def process_chat(self, user_message):
         """Process chat with both short-term and long-term memory"""
         try:
-            # Retrieve relevant memories from long-term storage
-            query_embedding = self.llm_handler.get_embeddings(user_message)
-            relevant_memories = self.db_manager.retrieve_memories(query_embedding.tolist(), top_k=2)
+            # Get relevant long-term memories
+            long_term_memories = self.retrieve_relevant_memories(user_message)
             
-            # Build context from both short-term and long-term memory
-            context = self._build_context(user_message)
+            # Convert short-term memory to the format expected by LLMHandler
+            conversation_history = []
+            for msg in self.short_term_memory:
+                if msg['role'] in ['user', 'assistant', 'system']:
+                    conversation_history.append({
+                        'role': msg['role'],
+                        'content': msg['content']
+                    })
             
-            # Add relevant file content to context
-            if relevant_memories:
-                context += "\nRelevant file content:\n"
-                for memory in relevant_memories:
-                    context += f"- {memory[0]}\n"
+            # Build additional context string containing only long-term memories
+            additional_context = ""
+            if long_term_memories:
+                additional_context = "Relevant past memories:\n"
+                for memory in long_term_memories:
+                    additional_context += f"- {memory[0]}\n"
             
             # Get LLM response using the LLM handler
-            llm_response = self.llm_handler.generate_response(context, user_message)
+            llm_response = self.llm_handler.generate_response(
+                user_input=user_message,
+                conversation_history=conversation_history,
+                additional_context=additional_context if additional_context else None
+            )
             
             # Store in both memory systems
             self._add_to_short_term('user', user_message)

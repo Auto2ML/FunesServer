@@ -7,7 +7,12 @@ def adapt_numpy_array(arr):
     embedding_str = "[" + ",".join(map(str, arr.tolist())) + "]"
     return AsIs(f"'{embedding_str}'")
 
+def adapt_list(lst):
+    embedding_str = "[" + ",".join(map(str, lst)) + "]"
+    return AsIs(f"'{embedding_str}'")
+
 register_adapter(np.ndarray, adapt_numpy_array)
+register_adapter(list, adapt_list)  # Add adapter for Python lists
 
 class DatabaseManager:
     def __init__(self, db_params):
@@ -83,5 +88,10 @@ class DatabaseManager:
     def delete_memories_by_source(self, source):
         """Delete memories from the database by source"""
         self.cursor.execute("DELETE FROM memories WHERE source = %s;", (source,))
+        self.conn.commit()
+    
+    def clear_memories(self):
+        """Delete all memories from the database"""
+        self.cursor.execute("DELETE FROM memories;")
         self.conn.commit()
 
