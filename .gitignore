@@ -2,6 +2,7 @@
 improvements.md
 *.log
 funes.log
+*.txt
 
 # Python virtual environment
 funes-env/
