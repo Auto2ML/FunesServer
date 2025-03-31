@@ -23,6 +23,125 @@ class LLMBackend(abc.ABC):
         """Check if this backend/model supports tool use"""
         pass
 
+class LlamafileBackend(LLMBackend):
+    """Llamafile backend implementation using OpenAI-compatible API"""
+    
+    def __init__(self, model_name: str = None, api_url: str = None):
+        self.api_url = api_url or "http://localhost:8080/v1"
+        self.api_key = "sk-no-key-required"  # Llamafile doesn't require a real API key
+        self.model_name = model_name or "LLaMA_CPP"  # Default model name for Llamafile
+        
+    def supports_tool_use(self) -> bool:
+        """Most Llamafile models support tool use via the OpenAI function calling API"""
+        return True
+    
+    def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        # Make sure we have a clean messages structure
+        formatted_messages = []
+        
+        # Process and clean each message
+        for msg in messages:
+            if msg["role"] in ["system", "user", "assistant"]:
+                message_obj = {
+                    "role": msg["role"],
+                    "content": msg["content"].strip() if msg["content"] is not None else ""
+                }
+                # Include tool_calls if present in the message
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    message_obj["tool_calls"] = msg["tool_calls"]
+                formatted_messages.append(message_obj)
+            elif msg["role"] == "tool":
+                # For Llamafile/OpenAI format, include the tool response
+                formatted_messages.append({
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", "unknown"),
+                    "name": msg.get("name", "unknown_tool"),
+                    "content": msg["content"]
+                })
+        
+        # Prepare the request parameters for OpenAI-compatible API
+        params = {
+            "model": self.model_name,
+            "messages": formatted_messages,
+            "temperature": 0.7,
+            "max_tokens": 1024
+        }
+        
+        # Add functions/tools if provided (using OpenAI format)
+        if tools is not None:
+            # Format tools for OpenAI-compatible function calling
+            openai_functions = []
+            for tool in tools:
+                if "function" in tool:
+                    openai_functions.append(tool["function"])
+            
+            if openai_functions:
+                params["functions"] = openai_functions
+                # Optional: You can set function_call to "auto" if you want the model to decide when to call functions
+                params["function_call"] = "auto"
+                print(f"[LlamafileBackend] Including {len(openai_functions)} functions in request")
+            else:
+                print("[LlamafileBackend] No valid functions found in tools")
+        
+        # Send to Llamafile OpenAI-compatible API
+        try:
+            # Make the HTTP POST request to the Llamafile API endpoint
+            print(f"[LlamafileBackend] Sending request to {self.api_url}/chat/completions")
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            response = requests.post(
+                f"{self.api_url}/chat/completions", 
+                headers=headers,
+                json=params
+            )
+            response.raise_for_status()  # Raise exception for HTTP errors
+            
+            response_data = response.json()
+            print(f"[LlamafileBackend] Response received: {json.dumps(response_data)[:100]}...")
+            
+            # Extract the response content from the OpenAI-compatible format
+            if "choices" in response_data and len(response_data["choices"]) > 0:
+                message = response_data["choices"][0].get("message", {})
+                content = message.get("content", "")
+                
+                # Handle function calls if present (convert to tool_calls format)
+                tool_calls = []
+                if "function_call" in message:
+                    # Handle single function call format
+                    function_call = message["function_call"]
+                    tool_calls.append({
+                        "function": {
+                            "name": function_call.get("name", ""),
+                            "arguments": function_call.get("arguments", "{}")
+                        }
+                    })
+                elif "tool_calls" in message:
+                    # Handle multiple tool calls format
+                    for tool_call in message["tool_calls"]:
+                        if "function" in tool_call:
+                            tool_calls.append({
+                                "function": tool_call["function"]
+                            })
+                
+                return {
+                    'content': content,
+                    'tool_calls': tool_calls
+                }
+            else:
+                return {
+                    'content': "No valid response from the model",
+                    'tool_calls': []
+                }
+            
+        except Exception as e:
+            print(f"[LlamafileBackend] Error: {str(e)}")
+            return {
+                'content': f"Error generating response: {str(e)}",
+                'tool_calls': []
+            }
+
 class OllamaBackend(LLMBackend):
     """Ollama backend implementation"""
     
@@ -301,6 +420,10 @@ class LLMHandler:
             self.llm_backend = LlamaCppBackend(llm_model_name)
         elif backend_type.lower() == "huggingface":
             self.llm_backend = HuggingFaceBackend(llm_model_name)
+        elif backend_type.lower() == "llamafile":
+            # Get API URL from config or use default
+            api_url = LLM_CONFIG.get('llamafile_api_url', "http://localhost:8080/api")
+            self.llm_backend = LlamafileBackend(llm_model_name, api_url)
         else:
             raise ValueError(f"Unsupported backend type: {backend_type}")
         

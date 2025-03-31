@@ -9,3 +9,4 @@ transformers
 torch
 llama-cpp-python
 requests
+openai
