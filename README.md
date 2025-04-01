@@ -90,6 +90,48 @@ MEMORY_CONFIG = {
 }
 ```
 
+## Tools System
+
+Funes includes a robust tools system that allows the LLM to interact with external functionalities. This system enables the LLM to:
+
+1. **Access Real-time Information**: Get current date/time information and weather conditions
+2. **Process and Format Data**: Extract, transform, and present data in natural language
+3. **Extend Capabilities**: The framework allows for easy addition of new tools
+
+### Available Tools:
+
+#### 1. DateTime Tool
+- Provides current date and time information
+- Supports multiple timezones
+- Configurable output formats (full, date, time, iso)
+- Example usage: "What's the current time in Tokyo?"
+
+#### 2. Weather Tool
+- Retrieves weather information for specified locations
+- Supports different temperature formats (Celsius/Fahrenheit)
+- Provides details like temperature, conditions, humidity, and wind speed
+- Example usage: "What's the weather like in Paris today?"
+
+### Tools Architecture:
+
+The tools system uses a flexible architecture based on the GenericTool class, making it easy to implement new tools. Each tool defines:
+- A unique name
+- A descriptive explanation of its functionality
+- Required and optional parameters
+- An execution method that performs the actual functionality
+
+### Tool Response Enhancement:
+
+The system includes a response enhancement mechanism that converts raw tool outputs into natural, conversational responses. This makes the LLM's responses feel more human-like when using tools.
+
+### Adding Custom Tools:
+
+To create a new tool, extend the GenericTool class and implement the required methods:
+1. Define properties: name, description, and parameters
+2. Implement the execute method that performs the tool's functionality
+3. Place the tool in the tools/ directory
+4. The tool will be automatically detected and made available to the LLM
+
 ## Manual Installation (Alternative)
 
 If you prefer to install components manually, follow these steps:
