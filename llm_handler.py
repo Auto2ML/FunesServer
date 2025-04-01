@@ -10,6 +10,147 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import llama_cpp
 import tools  # Import the new tools package
 
+# Utility functions for backend implementations
+def format_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Format messages consistently for all backends"""
+    formatted_messages = []
+    
+    # Process and clean each message
+    for msg in messages:
+        if msg["role"] in ["system", "user", "assistant"]:
+            message_obj = {
+                "role": msg["role"],
+                "content": msg["content"].strip() if msg["content"] is not None else ""
+            }
+            # Include tool_calls if present in the message
+            if "tool_calls" in msg and msg["tool_calls"]:
+                message_obj["tool_calls"] = msg["tool_calls"]
+            formatted_messages.append(message_obj)
+        elif msg["role"] == "tool":
+            # For tool responses, format for various backends
+            formatted_messages.append({
+                "role": "tool",
+                "tool_call_id": msg.get("tool_call_id", "unknown"),
+                "name": msg.get("name", "unknown_tool"),
+                "content": msg["content"]
+            })
+    
+    return formatted_messages
+
+def extract_tool_information(tools: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
+    """Extract tool names and relevant keywords from tools definition"""
+    tool_names = []
+    tool_relevant_keywords = []
+    
+    # Extract tool names and keywords from function descriptions
+    for tool in tools:
+        if "function" in tool:
+            name = tool["function"].get("name", "").lower()
+            if name:
+                tool_names.append(name)
+                # Add keywords from the function description
+                desc = tool["function"].get("description", "").lower()
+                if desc:
+                    for keyword in ["weather", "time", "date", "day", "extract", "get", "search"]:
+                        if keyword in desc and keyword not in tool_relevant_keywords:
+                            tool_relevant_keywords.append(keyword)
+    
+    return tool_names, tool_relevant_keywords
+
+def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
+    """Determine if tools should be used and which specific tool might be needed"""
+    if not tools or len(tools) == 0:
+        return False, None
+        
+    # Default keywords that suggest tool use
+    tool_relevant_keywords = [
+        "weather", "temperature", "forecast",  # Weather tool
+        "time", "date", "today", "now", "current time", "current date",  # Date/time tool
+        "latest", "current", "right now", "today's",  # Real-time info
+        "extract", "parse", "get", "find", "search",  # Extraction verbs
+        "convert", "calculate", "compute"  # Calculation verbs
+    ]
+    
+    # Extraction patterns that suggest tool use
+    extraction_patterns = ["what is", "how many", "who is", "when is", "extract", "parse"]
+    
+    # Get the latest user message
+    latest_user_msg = ""
+    for msg in reversed(messages):
+        if msg["role"] == "user" and msg.get("content"):
+            latest_user_msg = msg["content"].lower()
+            break
+    
+    # Get tool names and additional keywords
+    tool_names, additional_keywords = extract_tool_information(tools)
+    tool_relevant_keywords.extend(additional_keywords)
+    
+    # Check if any tool names are directly mentioned
+    for name in tool_names:
+        if name in latest_user_msg:
+            return True, name
+    
+    # Check for relevant keywords that suggest tool use
+    for keyword in tool_relevant_keywords:
+        if keyword in latest_user_msg:
+            # Attempt to match specific tools to keywords
+            if keyword in ["weather", "temperature", "forecast", "rain", "sunny"]:
+                return True, "get_weather"
+            elif keyword in ["time", "date", "today", "now", "current time", "current date"]:
+                return True, "get_date_time"
+            return True, None
+    
+    # Check for extraction patterns
+    for pattern in extraction_patterns:
+        if pattern in latest_user_msg:
+            return True, None
+    
+    # Default to not using tools
+    return False, None
+
+def extract_tool_calls_from_response(response_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract tool calls from various response formats"""
+    tool_calls = []
+    
+    # Try to get message from the response
+    message = {}
+    if "choices" in response_data and len(response_data["choices"]) > 0:
+        message = response_data["choices"][0].get("message", {})
+    else:
+        message = response_data.get("message", {})
+    
+    # Check for tool_calls in the message
+    if "tool_calls" in message:
+        # Handle OpenAI/LlamaCpp format
+        raw_tool_calls = message["tool_calls"]
+        for tool_call in raw_tool_calls:
+            if "type" in tool_call and tool_call["type"] == "function":
+                tool_calls.append({
+                    "function": {
+                        "name": tool_call["function"]["name"],
+                        "arguments": tool_call["function"]["arguments"]
+                    },
+                    "id": tool_call.get("id", f"call_{len(tool_calls)}")
+                })
+            elif "function" in tool_call:
+                tool_calls.append({
+                    "function": tool_call["function"],
+                    "id": tool_call.get("id", f"call_{len(tool_calls)}")
+                })
+    
+    # Check for function_call in the message (older OpenAI format)
+    elif "function_call" in message:
+        function_call = message["function_call"]
+        tool_calls.append({
+            "function": {
+                "name": function_call.get("name", ""),
+                "arguments": function_call.get("arguments", "{}")
+            },
+            "id": f"call_0"
+        })
+    
+    return tool_calls
+
 class LLMBackend(abc.ABC):
     """Abstract base class for LLM backends"""
     
@@ -36,28 +177,8 @@ class LlamafileBackend(LLMBackend):
         return True
     
     def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        # Make sure we have a clean messages structure
-        formatted_messages = []
-        
-        # Process and clean each message
-        for msg in messages:
-            if msg["role"] in ["system", "user", "assistant"]:
-                message_obj = {
-                    "role": msg["role"],
-                    "content": msg["content"].strip() if msg["content"] is not None else ""
-                }
-                # Include tool_calls if present in the message
-                if "tool_calls" in msg and msg["tool_calls"]:
-                    message_obj["tool_calls"] = msg["tool_calls"]
-                formatted_messages.append(message_obj)
-            elif msg["role"] == "tool":
-                # For Llamafile/OpenAI format, include the tool response
-                formatted_messages.append({
-                    "role": "tool",
-                    "tool_call_id": msg.get("tool_call_id", "unknown"),
-                    "name": msg.get("name", "unknown_tool"),
-                    "content": msg["content"]
-                })
+        # Make sure we have a clean messages structure using the shared function
+        formatted_messages = format_messages(messages)
         
         # Prepare the request parameters for OpenAI-compatible API
         params = {
@@ -101,39 +222,19 @@ class LlamafileBackend(LLMBackend):
             response_data = response.json()
             print(f"[LlamafileBackend] Response received: {json.dumps(response_data)[:100]}...")
             
-            # Extract the response content from the OpenAI-compatible format
+            # Extract the response content and tool calls using the shared function
+            content = ""
             if "choices" in response_data and len(response_data["choices"]) > 0:
                 message = response_data["choices"][0].get("message", {})
                 content = message.get("content", "")
-                
-                # Handle function calls if present (convert to tool_calls format)
-                tool_calls = []
-                if "function_call" in message:
-                    # Handle single function call format
-                    function_call = message["function_call"]
-                    tool_calls.append({
-                        "function": {
-                            "name": function_call.get("name", ""),
-                            "arguments": function_call.get("arguments", "{}")
-                        }
-                    })
-                elif "tool_calls" in message:
-                    # Handle multiple tool calls format
-                    for tool_call in message["tool_calls"]:
-                        if "function" in tool_call:
-                            tool_calls.append({
-                                "function": tool_call["function"]
-                            })
-                
-                return {
-                    'content': content,
-                    'tool_calls': tool_calls
-                }
-            else:
-                return {
-                    'content': "No valid response from the model",
-                    'tool_calls': []
-                }
+            
+            # Use shared function to extract tool calls
+            tool_calls = extract_tool_calls_from_response(response_data)
+            
+            return {
+                'content': content,
+                'tool_calls': tool_calls
+            }
             
         except Exception as e:
             print(f"[LlamafileBackend] Error: {str(e)}")
@@ -155,22 +256,16 @@ class OllamaBackend(LLMBackend):
         return True
     
     def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        # Make sure we have a clean messages structure
+        # Format messages using the shared utility function
         formatted_messages = []
         
-        # Process and clean each message
-        for msg in messages:
+        # Process and clean each message for Ollama's specific format
+        for msg in format_messages(messages):
             if msg["role"] in ["system", "user", "assistant"]:
-                message_obj = {
-                    "role": msg["role"],
-                    "content": msg["content"].strip() if msg["content"] is not None else ""
-                }
-                # Include tool_calls if present in the message
-                if "tool_calls" in msg and msg["tool_calls"]:
-                    message_obj["tool_calls"] = msg["tool_calls"]
-                formatted_messages.append(message_obj)
+                # Keep the original format for system, user, and assistant messages
+                formatted_messages.append(msg)
             elif msg["role"] == "tool":
-                # Add tool responses as assistant messages according to Ollama format
+                # For Ollama, convert tool responses to assistant messages
                 formatted_messages.append({
                     "role": "assistant",
                     "content": f"Tool response from {msg.get('name', 'unknown')}: {msg['content']}"
@@ -180,35 +275,20 @@ class OllamaBackend(LLMBackend):
         params = {"model": self.model_name, "messages": formatted_messages, "stream": False}
         
         # Only add tools if provided AND the request seems appropriate for tool use
-        # This check allows the model to respond normally for general knowledge questions
         if tools is not None:
-            # Look for specific markers that might indicate tool use is beneficial
-            # Check the latest user message
-            user_message = next((msg["content"] for msg in reversed(formatted_messages) 
-                              if msg["role"] == "user"), "")
-            
-            # These keywords might indicate when tools would be useful
-            tool_relevant_keywords = [
-                "weather", "temperature", "forecast",  # Weather tool
-                "time", "date", "today", "now", "current time", "current date",  # Date/time tool
-                "latest", "current", "right now", "today's"  # Real-time info
-            ]
-            
-            # Check for tool names in the user message
-            tool_names = [t.get("function", {}).get("name", "") for t in tools]
-            tool_name_mentioned = any(name in user_message.lower() for name in tool_names if name)
-            
-            # Check for keywords that suggest tool use would be helpful
-            keywords_present = any(keyword in user_message.lower() for keyword in tool_relevant_keywords)
+            # Use the shared function to determine if tools should be used
+            should_use_tool, suggested_tool = should_use_tools(messages, tools)
             
             # Always include tools when in a tool conversation (if there's a previous tool response)
             in_tool_conversation = any(msg.get("role") == "assistant" and "Tool response from" in msg.get("content", "") 
                                    for msg in formatted_messages)
             
-            # Add tools to the request only when appropriate
-            if tool_name_mentioned or keywords_present or in_tool_conversation:
+            # Add tools to the request when appropriate
+            if should_use_tool or in_tool_conversation:
                 params["tools"] = tools
                 print("[OllamaBackend] Including tools in request based on content analysis")
+                if suggested_tool:
+                    print(f"[OllamaBackend] Suggested tool: {suggested_tool}")
             else:
                 print("[OllamaBackend] Omitting tools from request - query appears to be general knowledge")
         
@@ -252,74 +332,219 @@ class LlamaCppBackend(LLMBackend):
     def __init__(self, model_path: str, context_size: int = 4096, 
                  temperature: float = 0.7, max_tokens: int = 1024):
         self.model_path = model_path
-        self.llm = llama_cpp.Llama(
-            model_path=model_path,
-            n_ctx=context_size,
-            temperature=temperature
-        )
+        self.temperature = temperature  # Store temperature as an instance variable
+        self.context_size = context_size
         self.max_tokens = max_tokens
+        
+        # We'll load models with different formats depending on the request
+        self._llm_instances = {}
         
         # Try to extract model name from path for feature detection
         path_parts = model_path.split('/')
         filename = path_parts[-1] if path_parts else ""
         self.base_model = filename.split('.')[0] if '.' in filename else filename
-    
+        
+        print(f"[LlamaCppBackend] Initialized for model: {model_path}")
+        
+    def _get_llm(self, chat_format="chatml"):
+        """Get or create a llama.cpp instance with the specified chat format"""
+        if chat_format not in self._llm_instances:
+            print(f"[LlamaCppBackend] Creating new llm instance with format: {chat_format}")
+            try:
+                self._llm_instances[chat_format] = llama_cpp.Llama(
+                    model_path=self.model_path,
+                    n_ctx=self.context_size,
+                    temperature=self.temperature,
+                    chat_format=chat_format
+                )
+                print(f"[LlamaCppBackend] Model loaded successfully with {chat_format} format")
+            except Exception as e:
+                print(f"[LlamaCppBackend] Error loading model with {chat_format} format: {str(e)}")
+                raise
+        return self._llm_instances[chat_format]
+        
     def supports_tool_use(self) -> bool:
         """All models are assumed to support tool use"""
         return True
     
     def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        # Make sure we have clean messages
+        # Make sure we have clean messages using the shared utility function
         formatted_messages = []
-        for msg in messages:
+        for msg in format_messages(messages):
             if msg["role"] in ["system", "user", "assistant"]:
+                formatted_messages.append(msg)
+            elif msg["role"] == "tool":
+                # For tool responses, convert to llama.cpp format
                 formatted_messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"].strip()
+                    "role": "function",
+                    "name": msg.get("name", "unknown_tool"),
+                    "content": msg["content"]
                 })
         
-        # Always include tool information in system messages
-        # Convert messages to llama.cpp format
-        prompt = ""
-        for msg in formatted_messages:
-            role = msg["role"]
-            content = msg["content"]
-            
-            # If this is the system message and tools are provided, add tool descriptions
-            if role == "system" and tools is not None:
-                tools_json = json.dumps(tools, indent=2)
-                content += f"\n\nYou have access to the following tools:\n{tools_json}\n"
-                content += "\nWhen a user request requires using these tools, respond with a JSON object containing 'tool_calls' with the format: [{\"name\": \"tool_name\", \"arguments\": {...}}]."
-            
-            if role == "system":
-                prompt += f"<s>[INST] <<SYS>>\n{content}\n<</SYS>>\n\n"
-            elif role == "user":
-                if not prompt:
-                    prompt += f"<s>[INST] {content} [/INST]"
-                else:
-                    prompt += f"{content} [/INST]"
-            elif role == "assistant":
-                prompt += f" {content} </s><s>[INST] "
-        
-        # Handle case where we might end with an unclosed instruction tag
-        if prompt.endswith("[INST] "):
-            prompt = prompt[:-7]  # Remove the trailing "[INST] "
-        
         try:
-            response = self.llm(
-                prompt=prompt,
-                max_tokens=self.max_tokens,
-                echo=False
-            )
-            content = response["choices"][0]["text"]
+            print(f"[LlamaCppBackend] Processing {len(formatted_messages)} messages")
+            # Convert tools to llama.cpp format if provided
+            llama_tools = None
+            tool_choice = None
             
-            # For llama.cpp, we need to rely on native tool handling
-            # No more parsing from text responses since we only support models with native tool capability
+            if tools is not None and len(tools) > 0:
+                print(f"[LlamaCppBackend] Processing {len(tools)} tools")
+                llama_tools = []
+                for tool in tools:
+                    # Convert from our format to llama.cpp expected format
+                    if "function" in tool:
+                        llama_tools.append({
+                            "type": "function",
+                            "function": tool["function"]
+                        })
+                print(f"[LlamaCppBackend] Converted {len(llama_tools)} tools for llama.cpp")
+            
+            # Use shared utility to determine if we should use function calling
+            should_use_function_calling, suggested_tool = should_use_tools(messages, tools)
+            
+            # Get the latest user message to check for specific tool mentions
+            latest_user_msg = ""
+            for msg in reversed(formatted_messages):
+                if msg["role"] == "user" and msg.get("content"):
+                    latest_user_msg = msg["content"].lower()
+                    break
+            
+            # Check if a specific tool is directly mentioned to force its use
+            if should_use_function_calling and llama_tools:
+                # Look for explicit mentions of tools
+                for tool in tools:
+                    if "function" in tool:
+                        tool_name = tool["function"].get("name", "").lower()
+                        if tool_name and tool_name in latest_user_msg:
+                            # Force the model to use this specific tool
+                            tool_choice = {
+                                "type": "function",
+                                "function": {
+                                    "name": tool_name
+                                }
+                            }
+                            print(f"[LlamaCppBackend] Forcing use of tool: {tool_name}")
+                            break
+                
+                # If time/date is mentioned, force the datetime tool
+                if any(keyword in latest_user_msg for keyword in ["time", "date", "today", "now", "current time", "current date"]):
+                    for tool in tools:
+                        if "function" in tool and tool["function"].get("name") == "get_date_time":
+                            tool_choice = {
+                                "type": "function",
+                                "function": {
+                                    "name": "get_date_time"
+                                }
+                            }
+                            print("[LlamaCppBackend] Forcing use of get_date_time tool")
+                            break
+                            
+                # If weather is mentioned, force the weather tool
+                if any(keyword in latest_user_msg for keyword in ["weather", "temperature", "forecast", "rain", "sunny"]):
+                    for tool in tools:
+                        if "function" in tool and tool["function"].get("name") == "get_weather":
+                            tool_choice = {
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather"
+                                }
+                            }
+                            print("[LlamaCppBackend] Forcing use of get_weather tool")
+                            break
+                
+                # If a specific tool was suggested by the shared function, use it
+                if suggested_tool:
+                    for tool in tools:
+                        if "function" in tool and tool["function"].get("name") == suggested_tool:
+                            tool_choice = {
+                                "type": "function",
+                                "function": {
+                                    "name": suggested_tool
+                                }
+                            }
+                            print(f"[LlamaCppBackend] Using suggested tool: {suggested_tool}")
+                            break
+            
+            # Try function calling first if needed, otherwise use standard chat
+            response = None
+            if should_use_function_calling:
+                print("[LlamaCppBackend] Using function calling mode (chatml-function-calling)")
+                try:
+                    llm_func = self._get_llm("chatml-function-calling")
+                    response = llm_func.create_chat_completion(
+                        messages=formatted_messages,
+                        tools=llama_tools,
+                        tool_choice=tool_choice,
+                        max_tokens=self.max_tokens,
+                        temperature=self.temperature
+                    )
+                    print(f"[LlamaCppBackend] Function calling response received")
+                    
+                    # Check if the response actually contains tool calls or is empty
+                    if "choices" in response and len(response["choices"]) > 0:
+                        message = response["choices"][0].get("message", {})
+                        content = message.get("content", "")
+                        tool_calls = message.get("tool_calls", [])
+                        
+                        # If no tool calls and empty/short content, fall back to standard chat
+                        if not tool_calls and (not content or len(content.strip()) < 10):
+                            print("[LlamaCppBackend] Function calling resulted in empty response, falling back to standard chat")
+                            response = None  # Clear response to trigger fallback
+                    else:
+                        print("[LlamaCppBackend] Function calling returned invalid response, falling back to standard chat")
+                        response = None  # Clear response to trigger fallback
+                        
+                except Exception as e:
+                    print(f"[LlamaCppBackend] Error with function calling: {str(e)}")
+                    response = None  # Clear response to trigger fallback
+            
+            # Fall back to standard chat if function calling wasn't used or failed
+            if response is None:
+                print("[LlamaCppBackend] Using standard chat mode (chatml)")
+                try:
+                    llm_std = self._get_llm("chatml")
+                    response = llm_std.create_chat_completion(
+                        messages=formatted_messages,
+                        max_tokens=self.max_tokens,
+                        temperature=self.temperature
+                    )
+                    print(f"[LlamaCppBackend] Standard chat response received")
+                except Exception as e:
+                    print(f"[LlamaCppBackend] Error with standard chat: {str(e)}")
+                    # If even the fallback fails, return an error
+                    return {
+                        'content': f"Error generating response: {str(e)}",
+                        'tool_calls': []
+                    }
+            
+            # Extract the content and any tool calls from the response
+            if "choices" not in response or len(response["choices"]) == 0:
+                print("[LlamaCppBackend] No choices in response!")
+                return {
+                    'content': "I'm sorry, I couldn't generate a proper response. Please try again.",
+                    'tool_calls': []
+                }
+                
+            message = response["choices"][0].get("message", {})
+            content = message.get("content", "")
+            
+            if not content or content.strip() == "":
+                print("[LlamaCppBackend] Empty content in response!")
+                content = "I'm sorry, I couldn't generate a proper response. Please try again."
+            
+            # Use shared function to extract tool calls
+            tool_calls = extract_tool_calls_from_response(response)
+            
+            print(f"[LlamaCppBackend] Final content length: {len(content)}")
+            print(f"[LlamaCppBackend] Final tool calls: {len(tool_calls)}")
             return {
                 'content': content,
-                'tool_calls': []  # Tool calls will only be supported natively in future llama.cpp versions
+                'tool_calls': tool_calls
             }
         except Exception as e:
+            import traceback
+            print(f"[LlamaCppBackend] Error in generate method: {str(e)}")
+            print(f"[LlamaCppBackend] Traceback: {traceback.format_exc()}")
             return {
                 'content': f"Error generating response: {str(e)}",
                 'tool_calls': []
@@ -349,14 +574,8 @@ class HuggingFaceBackend(LLMBackend):
         return True
     
     def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
-        # Make sure we have clean messages
-        formatted_messages = []
-        for msg in messages:
-            if msg["role"] in ["system", "user", "assistant"]:
-                formatted_messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"].strip()
-                })
+        # Use the shared function to format messages
+        formatted_messages = format_messages(messages)
         
         # Convert messages to a prompt format
         prompt = ""
@@ -366,9 +585,15 @@ class HuggingFaceBackend(LLMBackend):
             
             # If this is the system message and tools are provided, add tool descriptions
             if role == "system" and tools is not None:
-                tools_json = json.dumps(tools, indent=2)
-                content += f"\n\nYou have access to the following tools:\n{tools_json}\n"
-                content += "\nWhen a user request requires using these tools, respond with a JSON object containing 'tool_calls' with the format: [{\"name\": \"tool_name\", \"arguments\": {...}}]."
+                # Check if we should use tools for this request
+                should_use_tool, suggested_tool = should_use_tools(messages, tools)
+                if should_use_tool:
+                    tools_json = json.dumps(tools, indent=2)
+                    content += f"\n\nYou have access to the following tools:\n{tools_json}\n"
+                    content += "\nWhen a user request requires using these tools, respond with a JSON object containing 'tool_calls' with the format: [{\"name\": \"tool_name\", \"arguments\": {...}}]."
+                    
+                    if suggested_tool:
+                        content += f"\n\nThe tool '{suggested_tool}' might be especially helpful for this request."
             
             if role == "system":
                 prompt += f"<|system|>\n{content}\n"
@@ -391,11 +616,59 @@ class HuggingFaceBackend(LLMBackend):
             # Extract only the assistant's response
             assistant_response = result.split("<|assistant|>\n")[-1].strip()
             
-            # For HuggingFace models, we'll rely on the API's native tool support in future
-            # No parsing from text since we're only supporting models with native tool capability
+            # Try to extract any tool calls from the text format
+            tool_calls = []
+            
+            # Look for JSON-like tool call format in the response
+            tool_call_match = re.search(r'\{\s*"tool_calls"\s*:\s*(\[.*?\])\s*\}', assistant_response, re.DOTALL)
+            if tool_call_match:
+                try:
+                    tool_calls_json = tool_call_match.group(1)
+                    # Parse the extracted JSON
+                    parsed_tool_calls = json.loads(tool_calls_json)
+                    
+                    # Convert to standard format
+                    for i, call in enumerate(parsed_tool_calls):
+                        if "name" in call and "arguments" in call:
+                            tool_calls.append({
+                                "function": {
+                                    "name": call["name"],
+                                    "arguments": json.dumps(call["arguments"]) if isinstance(call["arguments"], dict) else call["arguments"]
+                                },
+                                "id": f"call_{i}"
+                            })
+                except:
+                    # If JSON parsing fails, leave tool_calls empty
+                    pass
+            
+            # Also check for function_call format
+            function_call_match = re.search(r'\{\s*"function"\s*:\s*\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{.*?\})\s*\}\s*\}', assistant_response, re.DOTALL)
+            if function_call_match and not tool_calls:
+                try:
+                    function_name = function_call_match.group(1)
+                    function_args = function_call_match.group(2)
+                    
+                    tool_calls.append({
+                        "function": {
+                            "name": function_name,
+                            "arguments": function_args
+                        },
+                        "id": "call_0"
+                    })
+                except:
+                    # If extraction fails, leave tool_calls empty
+                    pass
+            
+            # Clean the response if we found tool calls
+            if tool_calls:
+                # Remove the JSON part from the response
+                assistant_response = re.sub(r'\{\s*"tool_calls"\s*:\s*\[.*?\]\s*\}', '', assistant_response, flags=re.DOTALL)
+                assistant_response = re.sub(r'\{\s*"function"\s*:\s*\{.*?\}\s*\}', '', assistant_response, flags=re.DOTALL)
+                assistant_response = assistant_response.strip()
+            
             return {
                 'content': assistant_response,
-                'tool_calls': []  # Tool calls will be handled natively in future HuggingFace versions
+                'tool_calls': tool_calls
             }
         except Exception as e:
             return {

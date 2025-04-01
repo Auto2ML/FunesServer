@@ -3,7 +3,7 @@ Configuration settings for Funes server
 """
 # LLM model configuration
 LLM_CONFIG = {
-    'model_name': 'gemma:7b',
+    'model_name': 'llama3.2:latest',
     'backend_type': 'ollama',  # Options: 'ollama', 'llamacpp', 'huggingface', 'llamafile'
     #'model_name': '/home/julio/.ollama/models/blobs/sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff',
     'llamafile_api_url': "http://localhost:8080/v1",  # Default URL for Llamafile API (OpenAI-compatible format)
