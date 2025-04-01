@@ -10,3 +10,8 @@ torch
 llama-cpp-python
 requests
 openai
+# LlamaIndex dependencies
+llama-index-core>=0.10.0
+llama-index-llms-ollama
+llama-index-embeddings-huggingface
+llama-index-vector-stores-postgres

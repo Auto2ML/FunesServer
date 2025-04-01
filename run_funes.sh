@@ -1,11 +1,22 @@
 #!/bin/bash
+# Run script for Funes server with LlamaIndex implementation
 
-# Run ollama server
-ollama serve
+# Activate the virtual environment if it exists
+if [ -d "funes-env" ]; then
+    source funes-env/bin/activate
+elif [ -d "env" ]; then
+    source env/bin/activate
+elif [ -d "venv" ]; then
+    source venv/bin/activate
+fi
 
-# Activate virtual environment
-source funes-env/bin/activate
+# Set environment variables
+export PYTHONPATH=$PYTHONPATH:$(pwd)
+export USE_LLAMAINDEX=true  # Enable LlamaIndex implementation by default
 
-# Run Funes
-python /home/julio/Funes/funes.py > funes.log 2>&1
+# Run the server
+python funes.py
+
+# Deactivate virtual environment
+deactivate
 

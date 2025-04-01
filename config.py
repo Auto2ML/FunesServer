@@ -46,6 +46,14 @@ DB_CONFIG = {
     'host': 'localhost'
 }
 
+# LlamaIndex configuration
+LLAMAINDEX_CONFIG = {
+    'enabled': True,  # Set to False to use legacy implementation
+    'vector_store_table': 'memories',  # Table name for vector storage
+    'agent_verbose': True,  # Enable verbose output from LlamaIndex agent
+    'storage_dir': 'llamaindex_storage',  # Directory for persisting indices
+}
+
 # Note: Funes always uses tools. If you encounter issues with tool functionality, 
 # try changing to a model with better tool support like 'llama3.2:latest'
 # For Llamafile support, make sure to run your llamafile with proper API access:
