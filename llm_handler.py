@@ -9,147 +9,9 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import llama_cpp
 import tools  # Import the new tools package
+from llm_utilities import format_messages, extract_tool_information, should_use_tools, extract_tool_calls_from_response, enhance_tool_response
 
-# Utility functions for backend implementations
-def format_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Format messages consistently for all backends"""
-    formatted_messages = []
-    
-    # Process and clean each message
-    for msg in messages:
-        if msg["role"] in ["system", "user", "assistant"]:
-            message_obj = {
-                "role": msg["role"],
-                "content": msg["content"].strip() if msg["content"] is not None else ""
-            }
-            # Include tool_calls if present in the message
-            if "tool_calls" in msg and msg["tool_calls"]:
-                message_obj["tool_calls"] = msg["tool_calls"]
-            formatted_messages.append(message_obj)
-        elif msg["role"] == "tool":
-            # For tool responses, format for various backends
-            formatted_messages.append({
-                "role": "tool",
-                "tool_call_id": msg.get("tool_call_id", "unknown"),
-                "name": msg.get("name", "unknown_tool"),
-                "content": msg["content"]
-            })
-    
-    return formatted_messages
-
-def extract_tool_information(tools: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
-    """Extract tool names and relevant keywords from tools definition"""
-    tool_names = []
-    tool_relevant_keywords = []
-    
-    # Extract tool names and keywords from function descriptions
-    for tool in tools:
-        if "function" in tool:
-            name = tool["function"].get("name", "").lower()
-            if name:
-                tool_names.append(name)
-                # Add keywords from the function description
-                desc = tool["function"].get("description", "").lower()
-                if desc:
-                    for keyword in ["weather", "time", "date", "day", "extract", "get", "search"]:
-                        if keyword in desc and keyword not in tool_relevant_keywords:
-                            tool_relevant_keywords.append(keyword)
-    
-    return tool_names, tool_relevant_keywords
-
-def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
-    """Determine if tools should be used and which specific tool might be needed"""
-    if not tools or len(tools) == 0:
-        return False, None
-        
-    # Default keywords that suggest tool use
-    tool_relevant_keywords = [
-        "weather", "temperature", "forecast",  # Weather tool
-        "time", "date", "today", "now", "current time", "current date",  # Date/time tool
-        "latest", "current", "right now", "today's",  # Real-time info
-        "extract", "parse", "get", "find", "search",  # Extraction verbs
-        "convert", "calculate", "compute"  # Calculation verbs
-    ]
-    
-    # Extraction patterns that suggest tool use
-    extraction_patterns = ["what is", "how many", "who is", "when is", "extract", "parse"]
-    
-    # Get the latest user message
-    latest_user_msg = ""
-    for msg in reversed(messages):
-        if msg["role"] == "user" and msg.get("content"):
-            latest_user_msg = msg["content"].lower()
-            break
-    
-    # Get tool names and additional keywords
-    tool_names, additional_keywords = extract_tool_information(tools)
-    tool_relevant_keywords.extend(additional_keywords)
-    
-    # Check if any tool names are directly mentioned
-    for name in tool_names:
-        if name in latest_user_msg:
-            return True, name
-    
-    # Check for relevant keywords that suggest tool use
-    for keyword in tool_relevant_keywords:
-        if keyword in latest_user_msg:
-            # Attempt to match specific tools to keywords
-            if keyword in ["weather", "temperature", "forecast", "rain", "sunny"]:
-                return True, "get_weather"
-            elif keyword in ["time", "date", "today", "now", "current time", "current date"]:
-                return True, "get_date_time"
-            return True, None
-    
-    # Check for extraction patterns
-    for pattern in extraction_patterns:
-        if pattern in latest_user_msg:
-            return True, None
-    
-    # Default to not using tools
-    return False, None
-
-def extract_tool_calls_from_response(response_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract tool calls from various response formats"""
-    tool_calls = []
-    
-    # Try to get message from the response
-    message = {}
-    if "choices" in response_data and len(response_data["choices"]) > 0:
-        message = response_data["choices"][0].get("message", {})
-    else:
-        message = response_data.get("message", {})
-    
-    # Check for tool_calls in the message
-    if "tool_calls" in message:
-        # Handle OpenAI/LlamaCpp format
-        raw_tool_calls = message["tool_calls"]
-        for tool_call in raw_tool_calls:
-            if "type" in tool_call and tool_call["type"] == "function":
-                tool_calls.append({
-                    "function": {
-                        "name": tool_call["function"]["name"],
-                        "arguments": tool_call["function"]["arguments"]
-                    },
-                    "id": tool_call.get("id", f"call_{len(tool_calls)}")
-                })
-            elif "function" in tool_call:
-                tool_calls.append({
-                    "function": tool_call["function"],
-                    "id": tool_call.get("id", f"call_{len(tool_calls)}")
-                })
-    
-    # Check for function_call in the message (older OpenAI format)
-    elif "function_call" in message:
-        function_call = message["function_call"]
-        tool_calls.append({
-            "function": {
-                "name": function_call.get("name", ""),
-                "arguments": function_call.get("arguments", "{}")
-            },
-            "id": f"call_0"
-        })
-    
-    return tool_calls
+# Utility functions for backend implementations have been moved to llm_utilities.py
 
 class LLMBackend(abc.ABC):
     """Abstract base class for LLM backends"""
@@ -808,16 +670,28 @@ class LLMHandler:
             if tool_calls:
                 print(f"[LLMHandler] Processing {len(tool_calls)} tool calls")
                 # Execute each tool call and add the results
+                enhanced_tool_results = []
+                
                 for i, tool_call in enumerate(tool_calls):
-                    print(f"[LLMHandler] Executing tool call {i+1}: {tool_call.get('name') or tool_call.get('function', {}).get('name')}")
+                    tool_name = tool_call.get('name') or tool_call.get('function', {}).get('name', 'unknown')
+                    print(f"[LLMHandler] Executing tool call {i+1}: {tool_name}")
+                    
                     try:
+                        # Get raw tool result
                         tool_result = self._execute_tool_call(tool_call)
                         print(f"[LLMHandler] Tool result received, length: {len(tool_result) if tool_result else 0}")
+                        
+                        # Create enhanced conversational response from the tool result
+                        enhanced_result = enhance_tool_response(user_input, tool_name, tool_result)
+                        enhanced_tool_results.append(enhanced_result)
+                        print(f"[LLMHandler] Enhanced tool result: {enhanced_result[:100]}...")
                     except Exception as e:
                         print(f"[LLMHandler] Error executing tool call: {str(e)}")
                         tool_result = f"Error executing tool: {str(e)}"
+                        enhanced_tool_results.append(f"I tried to use the {tool_name} tool, but encountered an error: {str(e)}")
                     
-                    # Add the tool call and result to the conversation
+                    # Add the tool call and raw result to the conversation history
+                    # (we need the raw result for the LLM to process properly)
                     messages.append({
                         "role": "assistant",
                         "content": None,
@@ -827,7 +701,7 @@ class LLMHandler:
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.get("id", f"call_{i}"),
-                        "name": tool_call.get("name", tool_call.get("function", {}).get("name")),
+                        "name": tool_name,
                         "content": tool_result
                     })
                 
@@ -838,29 +712,31 @@ class LLMHandler:
                     final_content = final_response.get('content', '')
                     print(f"[LLMHandler] Final response received, length: {len(final_content)}")
                     
-                    # Check if the response is empty and provide a fallback
-                    if not final_content or len(final_content.strip()) == 0:
-                        print("[LLMHandler] Received empty response, generating fallback response")
-                        # Create a fallback response using the tool results
-                        tool_results_summary = []
-                        for msg in messages:
-                            if msg.get('role') == 'tool':
-                                tool_name = msg.get('name', 'unknown tool')
-                                tool_result = msg.get('content', 'No result')
-                                tool_results_summary.append(f"I used the {tool_name} tool and got: {tool_result}")
-                        
-                        if tool_results_summary:
-                            fallback_response = "\n".join(tool_results_summary)
-                            print(f"[LLMHandler] Generated fallback response: {fallback_response[:100]}...")
-                            return fallback_response
+                    # Check if the response is empty or too short and provide a fallback using our enhanced results
+                    if not final_content or len(final_content.strip()) < 20:
+                        print("[LLMHandler] Received empty/short response, using enhanced tool results instead")
+                        if len(enhanced_tool_results) == 1:
+                            # For a single tool result, return it directly
+                            return enhanced_tool_results[0]
                         else:
-                            return "I used tools to answer your question, but couldn't generate a proper response. Here's what I found: " + str(tool_result)
+                            # For multiple tool results, combine them
+                            combined_response = "Here's what I found for you:\n\n"
+                            combined_response += "\n\n".join(enhanced_tool_results)
+                            return combined_response
                     
                     return final_content
                 except Exception as e:
                     print(f"[LLMHandler] Error generating final response: {str(e)}")
-                    # Provide a fallback even when an exception occurs
-                    return f"I retrieved this information for you: {tool_result}"
+                    # Provide a fallback using our enhanced results
+                    if enhanced_tool_results:
+                        if len(enhanced_tool_results) == 1:
+                            return enhanced_tool_results[0]
+                        else:
+                            combined_response = "Here's what I found for you:\n\n"
+                            combined_response += "\n\n".join(enhanced_tool_results)
+                            return combined_response
+                    else:
+                        return f"I retrieved some information for you, but couldn't format it properly: {tool_result}"
             else:
                 print("[LLMHandler] No tool calls in response, returning content directly")
                 # No tool calls, just return the content
