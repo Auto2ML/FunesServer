@@ -28,43 +28,71 @@ def format_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     
     return formatted_messages
 
-def extract_tool_information(tools: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
-    """Extract tool names and relevant keywords from tools definition"""
-    tool_names = []
-    tool_relevant_keywords = []
+def extract_tool_information(tools: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """
+    Extract comprehensive information about available tools
     
-    # Extract tool names and keywords from function descriptions
+    Args:
+        tools: List of tool definitions
+        
+    Returns:
+        Dictionary mapping tool names to their information including description,
+        parameters, and extracted keywords
+    """
+    tool_info = {}
+    
     for tool in tools:
         if "function" in tool:
-            name = tool["function"].get("name", "").lower()
+            function = tool["function"]
+            name = function.get("name", "").lower()
+            
             if name:
-                tool_names.append(name)
-                # Add keywords from the function description
-                desc = tool["function"].get("description", "").lower()
-                if desc:
-                    for keyword in ["weather", "time", "date", "day", "extract", "get", "search"]:
-                        if keyword in desc and keyword not in tool_relevant_keywords:
-                            tool_relevant_keywords.append(keyword)
+                # Extract all relevant information about the tool
+                description = function.get("description", "")
+                parameters = function.get("parameters", {})
+                
+                # Extract keywords from the description
+                # This creates a more comprehensive set of keywords than the hardcoded approach
+                keywords = set()
+                if description:
+                    # Extract individual words, filtering out common stop words
+                    stop_words = {"a", "an", "the", "and", "or", "but", "if", "then", "is", "are", "in", "on", "at", "to", "for"}
+                    words = re.findall(r'\b\w+\b', description.lower())
+                    keywords.update([word for word in words if word not in stop_words and len(word) > 2])
+                
+                # Store all the information
+                tool_info[name] = {
+                    "description": description,
+                    "parameters": parameters,
+                    "keywords": list(keywords)
+                }
     
-    return tool_names, tool_relevant_keywords
+    return tool_info
 
 def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
-    """Determine if tools should be used and which specific tool might be needed"""
+    """
+    Determine if tools should be used and which specific tool might be needed
+    
+    This function uses a more nuanced analysis of the user query and available tools
+    to make intelligent decisions about tool usage. It dynamically adapts to custom tools
+    created through the generic tool framework.
+    
+    Args:
+        messages: Conversation history
+        tools: Available tools
+        
+    Returns:
+        Tuple of (should_use, tool_name) where tool_name can be None if no specific tool is identified
+    """
+    # Exit early if no tools are available
     if not tools or len(tools) == 0:
         return False, None
+    
+    # Extract comprehensive tool information
+    tool_info = extract_tool_information(tools)
+    if not tool_info:
+        return False, None
         
-    # Default keywords that suggest tool use
-    tool_relevant_keywords = [
-        "weather", "temperature", "forecast",  # Weather tool
-        "time", "date", "today", "now", "current time", "current date",  # Date/time tool
-        "latest", "current", "right now", "today's",  # Real-time info
-        "extract", "parse", "get", "find", "search",  # Extraction verbs
-        "convert", "calculate", "compute"  # Calculation verbs
-    ]
-    
-    # Extraction patterns that suggest tool use
-    extraction_patterns = ["what is", "how many", "who is", "when is", "extract", "parse"]
-    
     # Get the latest user message
     latest_user_msg = ""
     for msg in reversed(messages):
@@ -72,29 +100,104 @@ def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]
             latest_user_msg = msg["content"].lower()
             break
     
-    # Get tool names and additional keywords
-    tool_names, additional_keywords = extract_tool_information(tools)
-    tool_relevant_keywords.extend(additional_keywords)
+    if not latest_user_msg:
+        return False, None
     
-    # Check if any tool names are directly mentioned
-    for name in tool_names:
-        if name in latest_user_msg:
-            return True, name
+    # Direct tool mention check - if user explicitly mentions a tool by name
+    for tool_name in tool_info:
+        if tool_name in latest_user_msg:
+            return True, tool_name
     
-    # Check for relevant keywords that suggest tool use
-    for keyword in tool_relevant_keywords:
-        if keyword in latest_user_msg:
-            # Attempt to match specific tools to keywords
-            if keyword in ["weather", "temperature", "forecast", "rain", "sunny"]:
-                return True, "get_weather"
-            elif keyword in ["time", "date", "today", "now", "current time", "current date"]:
-                return True, "get_date_time"
-            return True, None
+    # Context-based matching by analyzing query intent and tool purposes
+    tools_scores = {}
     
-    # Check for extraction patterns
-    for pattern in extraction_patterns:
-        if pattern in latest_user_msg:
-            return True, None
+    # These patterns suggest factual or dynamic information needs that tools could address
+    info_seeking_patterns = [
+        r"what is (?:the|current) (.+)\??",
+        r"how (?:many|much) (.+)\??",
+        r"when is (.+)\??",
+        r"where is (.+)\??",
+        r"(?:can you )?(?:tell|show) me (?:the|about) (.+)\??",
+        r"(?:can you )?(?:get|fetch|find|search for) (.+)\??",
+        r"(current|latest|today's) (.+)",
+        r"(.+) right now\??",
+    ]
+    
+    # Check if the message contains information-seeking patterns 
+    contains_info_seeking = any(re.search(pattern, latest_user_msg) for pattern in info_seeking_patterns)
+    
+    # Only proceed if the query seems to be seeking information
+    if contains_info_seeking:
+        for tool_name, info in tool_info.items():
+            # Initial score based on keyword matches
+            base_score = 0
+            
+            # Check for keyword matches between message and tool info
+            for keyword in info["keywords"]:
+                if keyword in latest_user_msg:
+                    base_score += 1
+            
+            # Extract key parameters from the tool's schema if available
+            parameter_keywords = []
+            if "parameters" in info and isinstance(info["parameters"], dict):
+                properties = info["parameters"].get("properties", {})
+                for param_name, param_details in properties.items():
+                    # Add parameter names and descriptions to the keyword list
+                    parameter_keywords.append(param_name)
+                    if isinstance(param_details, dict) and "description" in param_details:
+                        # Extract keywords from parameter descriptions
+                        desc_words = re.findall(r'\b\w+\b', param_details["description"].lower())
+                        parameter_keywords.extend([w for w in desc_words if len(w) > 3])
+            
+            # Check for parameter matches
+            for keyword in parameter_keywords:
+                if keyword in latest_user_msg:
+                    base_score += 0.5  # Lower weight for parameter matches
+            
+            # Analyze tool name components for additional matches
+            name_parts = tool_name.replace('_', ' ').split()
+            for part in name_parts:
+                if part in latest_user_msg and len(part) > 3:  # Avoid matching short words
+                    base_score += 1.5  # Higher weight for tool name matches
+            
+            # Apply tool-specific enhancements based on common patterns
+            # This works for both built-in and custom tools with similar purposes
+            
+            # Weather-related tools
+            if "weather" in tool_name or "weather" in info["description"].lower():
+                weather_indicators = ["weather", "temperature", "forecast", "rain", "sunny", "hot", "cold", "humid"]
+                for indicator in weather_indicators:
+                    if indicator in latest_user_msg:
+                        base_score += 1.5
+                
+                # Locations often indicate weather requests
+                location_pattern = r"(?:in|at|for) ([A-Za-z\s]+)(?:\.|,|\?|$)"
+                if re.search(location_pattern, latest_user_msg):
+                    base_score += 1
+            
+            # Time/date-related tools
+            elif any(x in tool_name for x in ["time", "date", "calendar"]) or \
+                 any(x in info["description"].lower() for x in ["time", "date", "calendar"]):
+                time_indicators = ["time", "date", "day", "today", "current", "now"]
+                for indicator in time_indicators:
+                    if indicator in latest_user_msg:
+                        base_score += 1.5
+            
+            # Store the score for this tool
+            tools_scores[tool_name] = base_score
+    
+        # If we have any tools with a score above threshold
+        if tools_scores and max(tools_scores.values(), default=0) > 0:
+            # Get the tool with the highest score
+            best_tool = max(tools_scores.items(), key=lambda x: x[1])
+            
+            # Only use the tool if it has a minimum score (reduces false positives)
+            # Higher threshold for more confidence
+            if best_tool[1] >= 2:
+                return True, best_tool[0]
+            # If no tool is confident enough but query seems to need information
+            elif contains_info_seeking:
+                return True, None
     
     # Default to not using tools
     return False, None
@@ -146,6 +249,8 @@ def enhance_tool_response(user_query: str, tool_name: str, tool_result: str) -> 
     """
     Create a more natural, conversational response based on tool results
     
+    This function dynamically adapts to custom tools by analyzing tool names and contents.
+    
     Args:
         user_query: Original user question that triggered the tool
         tool_name: Name of the tool that was executed
@@ -154,51 +259,118 @@ def enhance_tool_response(user_query: str, tool_name: str, tool_result: str) -> 
     Returns:
         A conversational response that naturally incorporates the tool result
     """
-    # Pattern-based templates for common tool responses
-    response_templates = {
-        "get_weather": [
+    # Extract the tool's general purpose from its name
+    tool_category = None
+    
+    # Check for common tool categories by name pattern
+    if "weather" in tool_name:
+        tool_category = "weather"
+    elif any(term in tool_name for term in ["time", "date", "calendar"]):
+        tool_category = "datetime"
+    elif any(term in tool_name for term in ["search", "find", "query", "lookup"]):
+        tool_category = "search"
+    elif any(term in tool_name for term in ["calculate", "compute", "math"]):
+        tool_category = "calculation"
+    
+    # Try to parse the tool result as JSON
+    try:
+        result_data = json.loads(tool_result)
+        is_json = True
+    except (json.JSONDecodeError, TypeError):
+        result_data = None
+        is_json = False
+    
+    # Category-specific formatting
+    if tool_category == "weather" and is_json:
+        # Format weather results in a natural way
+        if isinstance(result_data, dict):
+            # Common fields in weather APIs
+            temp = result_data.get("temperature") or result_data.get("temp")
+            cond = (result_data.get("conditions") or 
+                   result_data.get("description") or 
+                   result_data.get("weather"))
+            location = (result_data.get("location") or 
+                      result_data.get("city") or 
+                      result_data.get("place") or 
+                      "the requested location")
+            
+            if temp and cond:
+                units = result_data.get("units", "°C")
+                if not isinstance(units, str):
+                    units = "°"
+                return f"I checked the weather in {location}. It's currently {temp}{units} with {cond.lower() if isinstance(cond, str) else ''} conditions."
+    
+    elif tool_category == "datetime" and is_json:
+        # Format datetime results naturally
+        if isinstance(result_data, dict):
+            date = result_data.get("date") or result_data.get("current_date")
+            time = result_data.get("time") or result_data.get("current_time")
+            
+            if date and time:
+                return f"It's currently {time} on {date}."
+            elif time:
+                return f"The current time is {time}."
+            elif date:
+                return f"Today's date is {date}."
+    
+    # Category-specific templates when we can't extract structured data
+    templates = {
+        "weather": [
             "Based on the weather data, {result}",
             "I checked the weather for you. {result}",
             "The weather forecast shows {result}"
         ],
-        "get_date_time": [
+        "datetime": [
             "Right now it's {result}",
             "The current date and time is {result}",
             "According to my clock, it's {result}"
+        ],
+        "search": [
+            "Here's what I found: {result}",
+            "I searched for that information. {result}",
+            "The search returned: {result}"
+        ],
+        "calculation": [
+            "I calculated that {result}",
+            "The result is {result}",
+            "Based on my calculations: {result}"
         ],
         # Default templates for any tool
         "default": [
             "I found this information for you: {result}",
             "Here's what I discovered: {result}",
-            "The {tool_name} tool returned: {result}"
+            "Based on the {tool_name}: {result}"
         ]
     }
     
-    # Extract key information from the tool result if it's in JSON format
-    try:
-        result_data = json.loads(tool_result)
-        # If it's JSON, we could extract specific fields based on the tool type
-        if tool_name == "get_weather" and isinstance(result_data, dict):
-            if "temperature" in result_data and "conditions" in result_data:
-                temp = result_data.get("temperature")
-                cond = result_data.get("conditions", "").lower()
-                location = result_data.get("location", "the requested location")
-                
-                # More natural response for weather
-                return f"I checked the weather in {location}. It's currently {temp}°C with {cond} conditions."
-        
-        # For other JSON results, format them nicely
+    # Format the result for JSON data if we couldn't do specific formatting
+    if is_json and result_data:
+        # For JSON results, format them nicely
         tool_result = json.dumps(result_data, indent=2)
-    except (json.JSONDecodeError, TypeError):
-        # Not JSON, use as is
-        pass
+        
+        # Try to extract a key piece of information if there's just one main field
+        if isinstance(result_data, dict) and len(result_data) == 1:
+            key = list(result_data.keys())[0]
+            value = result_data[key]
+            if isinstance(value, (str, int, float, bool)):
+                tool_result = f"{key}: {value}"
     
-    # Select appropriate templates
-    templates = response_templates.get(tool_name, response_templates["default"])
+    # Choose appropriate templates
+    category_templates = templates.get(tool_category, templates["default"])
     
     # Choose a template based on simple hashing of the query for variety
-    template_index = hash(user_query) % len(templates)
-    template = templates[template_index]
+    template_index = hash(user_query) % len(category_templates)
+    template = category_templates[template_index]
+    
+    # Extract key verb from the user query to create more natural responses
+    query_verbs = ["show", "tell", "get", "find", "what", "how", "when", "where", "is", "are"]
+    user_verb = next((verb for verb in query_verbs if verb in user_query.lower()), None)
     
     # Format the response
-    return template.format(result=tool_result, tool_name=tool_name)
+    response = template.format(result=tool_result, tool_name=tool_name.replace("_", " "))
+    
+    # Make first character uppercase if it's not already
+    if response and len(response) > 0 and not response[0].isupper():
+        response = response[0].upper() + response[1:]
+    
+    return response
