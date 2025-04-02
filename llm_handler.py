@@ -638,7 +638,7 @@ class LLMHandler:
                     system_message += f"\n\nYou have access to these tools: {', '.join(tools_list)}. Use them when appropriate."
                     print("[LLMHandler] Added generic tool prompt as fallback")
             
-            print(f"[LLMHandler] System message prepared, length: {len(system_message)}")
+            print(f"[LLMHandler] System message prepared, length: {len(system_message)}"+"\n\n"+system_message)
             
             messages.append({"role": "system", "content": system_message})
             

@@ -31,7 +31,7 @@ def delete_memories_by_source_interface(source):
 
 def clear_memories_interface():
     """Gradio memory clearing interface"""
-    return memory_manager.clear_memories()
+    return memory_manager.db_manager.clear_memories()
 
 def upload_file_interface(file):
     """Handle file upload and processing"""
