@@ -45,12 +45,22 @@ class LlamaIndexLLMHandler:
     def _setup_llm(self):
         """Set up the LLM based on the backend type"""
         if self.backend_type.lower() == 'ollama':
-            self.llm = Ollama(model=self.model_name, request_timeout=360.0)
+            # Explicitly pass system_prompt parameter to Ollama
+            self.llm = Ollama(
+                model=self.model_name, 
+                request_timeout=360.0,
+                system_prompt=self.system_prompt
+            )
             Settings.llm = self.llm
             print(f"[LlamaIndexLLM] Using Ollama with model: {self.model_name}")
+            print(f"[LlamaIndexLLM] System prompt: {self.system_prompt[:50]}...")
         else:
             # Default to Ollama for now, we can add more backends later
-            self.llm = Ollama(model=self.model_name, request_timeout=360.0)
+            self.llm = Ollama(
+                model=self.model_name, 
+                request_timeout=360.0,
+                system_prompt=self.system_prompt
+            )
             Settings.llm = self.llm
             print(f"[LlamaIndexLLM] Unsupported backend type: {self.backend_type}, using Ollama")
 
