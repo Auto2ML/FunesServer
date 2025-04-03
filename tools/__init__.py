@@ -164,21 +164,15 @@ def store_tools_in_database() -> None:
         
         # Process each registered tool
         for tool_name, tool in _registered_tools.items():
-            # Create an enhanced description including parameters
-            enhanced_description = tool.description + "\n"
-            if hasattr(tool, "parameters") and tool.parameters:
-                enhanced_description += "Parameters:\n"
-                if "properties" in tool.parameters:
-                    for param_name, param_info in tool.parameters["properties"].items():
-                        param_desc = param_info.get("description", "")
-                        enhanced_description += f"- {param_name}: {param_desc}\n"
+            # Use only the tool name and description for embeddings
+            description = tool.description
             
-            # Generate embedding for the enhanced description
+            # Generate embedding for the tool name and description only
             print(f"Generating embedding for tool: {tool_name}")
-            embedding = embedding_model.encode(enhanced_description)
+            embedding = embedding_model.encode(description)
             
             # Store in database
-            db_manager.store_tool_embedding(tool_name, enhanced_description, embedding.tolist())
+            db_manager.store_tool_embedding(tool_name, description, embedding.tolist())
             print(f"Stored embedding for tool: {tool_name}")
             
         print("Tool embeddings stored in database successfully")

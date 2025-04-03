@@ -208,7 +208,7 @@ class DatabaseManager:
             # Lower distance = higher similarity, so we invert the comparison
             # Use a combination of similarity threshold and top_k
             self.cursor.execute(
-                """SELECT tool_name, description, 1 - (embedding <-> %s::vector) AS similarity
+                """SELECT tool_name, description, 2 - (embedding <-> %s::vector) AS similarity
                    FROM tools_embeddings
                    WHERE 2 - (embedding <-> %s::vector) > %s
                    ORDER BY similarity DESC
