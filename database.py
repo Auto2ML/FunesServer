@@ -201,7 +201,7 @@ class DatabaseManager:
             self.conn.rollback()
             raise
             
-    def find_similar_tools(self, query_embedding, similarity_threshold=0.75, top_k=3):
+    def find_similar_tools(self, query_embedding, similarity_threshold=0.8, top_k=3):
         """Find tools similar to the query embedding"""
         try:
             logger.info(f"Finding similar tools with threshold {similarity_threshold}")
@@ -210,7 +210,7 @@ class DatabaseManager:
             self.cursor.execute(
                 """SELECT tool_name, description, 1 - (embedding <-> %s::vector) AS similarity
                    FROM tools_embeddings
-                   WHERE 1 - (embedding <-> %s::vector) > %s
+                   WHERE 2 - (embedding <-> %s::vector) > %s
                    ORDER BY similarity DESC
                    LIMIT %s;""",
                 (query_embedding, query_embedding, similarity_threshold, top_k)
