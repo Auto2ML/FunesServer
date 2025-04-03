@@ -1,6 +1,8 @@
 """
 Configuration settings for Funes server
 """
+import logging
+
 # LLM model configuration
 LLM_CONFIG = {
     'model_name': 'llama3.2:1b',
@@ -17,7 +19,12 @@ LLM_CONFIG = {
         'gemma',
         'llama2:latest',
         'llamafile with llama-3-8b or llama-3-70b'  # Llamafile models also support tools
-    ]
+    ],
+    # Logging configuration
+    'log_level': 'INFO',  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    'enable_logging': True,  # Set to False to disable all logging
+    'log_format': '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    'log_date_format': '%Y-%m-%d %H:%M:%S'
 }
 
 # Embedding model configuration
@@ -38,6 +45,15 @@ DB_CONFIG = {
     'user': 'llm',
     'password': 'llm',
     'host': 'localhost'
+}
+
+# Logging configuration
+LOGGING_CONFIG = {
+    'level': logging.INFO,  # Default log level
+    'format': '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+    'date_format': '%Y-%m-%d %H:%M:%S',
+    'file_path': None,  # Set to a file path to enable logging to a file
+    'enable': True  # Master switch to enable/disable all logging
 }
 
 # Note: Funes always uses tools. If you encounter issues with tool functionality, 

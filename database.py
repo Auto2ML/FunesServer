@@ -2,6 +2,12 @@ import psycopg2
 from psycopg2.extensions import register_adapter, AsIs
 import json
 import numpy as np
+import logging
+import traceback
+
+# Configure logger
+logger = logging.getLogger('DatabaseManager')
+logging.basicConfig(level=logging.INFO)
 
 def adapt_numpy_array(arr):
     embedding_str = "[" + ",".join(map(str, arr.tolist())) + "]"
@@ -22,17 +28,17 @@ class DatabaseManager:
     def _setup_database(self):
         """Set up database connection and tables"""
         try:
-            print(f"[DatabaseManager] Connecting to database with params: {self.db_params}")
+            logger.info(f"Connecting to database with params: {self.db_params}")
             self.conn = psycopg2.connect(**self.db_params)
             self.cursor = self.conn.cursor()
-            print("[DatabaseManager] Database connection established")
+            logger.info("Database connection established")
             
             # Create vector extension if it doesn't exist
-            print("[DatabaseManager] Creating vector extension if needed")
+            logger.info("Creating vector extension if needed")
             self.cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
             
             # Create memories table without metadata
-            print("[DatabaseManager] Creating memories table if needed")
+            logger.info("Creating memories table if needed")
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id SERIAL PRIMARY KEY,
@@ -44,7 +50,7 @@ class DatabaseManager:
             """)
             
             # Create tools_embeddings table for tool information and embeddings
-            print("[DatabaseManager] Creating tools_embeddings table if needed")
+            logger.info("Creating tools_embeddings table if needed")
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS tools_embeddings (
                     id SERIAL PRIMARY KEY,
@@ -56,7 +62,7 @@ class DatabaseManager:
             """)
             
             # Create index on embedding for faster similarity search
-            print("[DatabaseManager] Creating embedding index if needed")
+            logger.info("Creating embedding index if needed")
             self.cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_memories_embedding 
                 ON memories 
@@ -65,7 +71,7 @@ class DatabaseManager:
             """)
             
             # Create index on tool embeddings for faster similarity search
-            print("[DatabaseManager] Creating tool embedding index if needed")
+            logger.info("Creating tool embedding index if needed")
             self.cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tools_embedding 
                 ON tools_embeddings 
@@ -74,24 +80,23 @@ class DatabaseManager:
             """)
             
             # Create index on timestamp for faster range queries
-            print("[DatabaseManager] Creating timestamp index if needed")
+            logger.info("Creating timestamp index if needed")
             self.cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_memories_timestamp 
                 ON memories (timestamp);
             """)
             
             self.conn.commit()
-            print("[DatabaseManager] Database setup completed successfully")
+            logger.info("Database setup completed successfully")
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error setting up database: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error setting up database: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def insert_memory(self, context, embedding, source):
         """Insert a memory into the database"""
         try:
-            print(f"[DatabaseManager] Inserting memory from source: {source}")
+            logger.info(f"Inserting memory from source: {source}")
             self.cursor.execute(
                 """INSERT INTO memories 
                    (context, embedding, source) 
@@ -99,18 +104,17 @@ class DatabaseManager:
                 (context, embedding, source)
             )
             self.conn.commit()
-            print("[DatabaseManager] Memory inserted successfully")
+            logger.info("Memory inserted successfully")
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error inserting memory: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error inserting memory: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self.conn.rollback()  # Rollback in case of error
             raise
     
     def retrieve_memories(self, query_embedding, top_k=3, category=None):
         """Retrieve relevant memories from the database"""
         try:
-            print(f"[DatabaseManager] Retrieving top {top_k} memories")
+            logger.info(f"Retrieving top {top_k} memories")
             sql_query = """
                 SELECT context, 
                 embedding <-> %s::vector AS distance 
@@ -127,60 +131,56 @@ class DatabaseManager:
             
             self.cursor.execute(sql_query, params)
             results = self.cursor.fetchall()
-            print(f"[DatabaseManager] Retrieved {len(results)} memories")
+            logger.info(f"Retrieved {len(results)} memories")
             return results
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error retrieving memories: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error retrieving memories: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []  # Return empty list in case of error
     
     def get_unique_sources(self):
         """Retrieve unique sources from the database"""
         try:
-            print("[DatabaseManager] Getting unique sources")
+            logger.info("Getting unique sources")
             self.cursor.execute("SELECT DISTINCT source FROM memories;")
             sources = [row[0] for row in self.cursor.fetchall()]
-            print(f"[DatabaseManager] Found {len(sources)} unique sources")
+            logger.info(f"Found {len(sources)} unique sources")
             return sources
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error getting unique sources: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error getting unique sources: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []  # Return empty list in case of error
 
     def delete_memories_by_source(self, source):
         """Delete memories from the database by source"""
         try:
-            print(f"[DatabaseManager] Deleting memories for source: {source}")
+            logger.info(f"Deleting memories for source: {source}")
             self.cursor.execute("DELETE FROM memories WHERE source = %s;", (source,))
             self.conn.commit()
-            print("[DatabaseManager] Memories deleted successfully")
+            logger.info("Memories deleted successfully")
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error deleting memories: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error deleting memories: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self.conn.rollback()  # Rollback in case of error
             raise
     
     def clear_memories(self):
         """Delete all memories from the database"""
         try:
-            print("[DatabaseManager] Clearing all memories")
+            logger.info("Clearing all memories")
             self.cursor.execute("DELETE FROM memories;")
             self.conn.commit()
-            print("[DatabaseManager] All memories cleared successfully")
+            logger.info("All memories cleared successfully")
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error clearing memories: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error clearing memories: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self.conn.rollback()  # Rollback in case of error
             raise
             
     def store_tool_embedding(self, tool_name, description, embedding):
         """Store tool information and embedding in the database"""
         try:
-            print(f"[DatabaseManager] Storing embedding for tool: {tool_name}")
+            logger.info(f"Storing embedding for tool: {tool_name}")
             # Use UPSERT (INSERT ... ON CONFLICT UPDATE) pattern for tools
             self.cursor.execute(
                 """INSERT INTO tools_embeddings 
@@ -194,18 +194,17 @@ class DatabaseManager:
                 (tool_name, description, embedding)
             )
             self.conn.commit()
-            print(f"[DatabaseManager] Tool embedding stored successfully for: {tool_name}")
+            logger.info(f"Tool embedding stored successfully for: {tool_name}")
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error storing tool embedding: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error storing tool embedding: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self.conn.rollback()
             raise
             
     def find_similar_tools(self, query_embedding, similarity_threshold=0.75, top_k=3):
         """Find tools similar to the query embedding"""
         try:
-            print(f"[DatabaseManager] Finding similar tools with threshold {similarity_threshold}")
+            logger.info(f"Finding similar tools with threshold {similarity_threshold}")
             # Lower distance = higher similarity, so we invert the comparison
             # Use a combination of similarity threshold and top_k
             self.cursor.execute(
@@ -217,39 +216,36 @@ class DatabaseManager:
                 (query_embedding, query_embedding, similarity_threshold, top_k)
             )
             results = self.cursor.fetchall()
-            print(f"[DatabaseManager] Found {len(results)} similar tools")
+            logger.info(f"Found {len(results)} similar tools")
             return results  # Returns [(tool_name, description, similarity), ...]
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error finding similar tools: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error finding similar tools: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []  # Return empty list in case of error
             
     def get_all_tools(self):
         """Retrieve all stored tools"""
         try:
-            print("[DatabaseManager] Retrieving all tools")
+            logger.info("Retrieving all tools")
             self.cursor.execute("SELECT tool_name, description FROM tools_embeddings;")
             results = self.cursor.fetchall()
-            print(f"[DatabaseManager] Found {len(results)} tools")
+            logger.info(f"Found {len(results)} tools")
             return results
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error retrieving all tools: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error retrieving all tools: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return []  # Return empty list in case of error
             
     def delete_tool(self, tool_name):
         """Remove a tool from the database"""
         try:
-            print(f"[DatabaseManager] Deleting tool: {tool_name}")
+            logger.info(f"Deleting tool: {tool_name}")
             self.cursor.execute("DELETE FROM tools_embeddings WHERE tool_name = %s;", (tool_name,))
             self.conn.commit()
-            print(f"[DatabaseManager] Tool {tool_name} deleted successfully")
+            logger.info(f"Tool {tool_name} deleted successfully")
         except Exception as e:
-            import traceback
-            print(f"[DatabaseManager] Error deleting tool: {str(e)}")
-            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"Error deleting tool: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             self.conn.rollback()
             raise
             
@@ -260,7 +256,7 @@ class DatabaseManager:
                 self.cursor.close()
             if hasattr(self, 'conn') and self.conn:
                 self.conn.close()
-            print("[DatabaseManager] Database connection closed")
+            logger.info("Database connection closed")
         except Exception as e:
-            print(f"[DatabaseManager] Error closing database connection: {str(e)}")
+            logger.error(f"Error closing database connection: {str(e)}")
 

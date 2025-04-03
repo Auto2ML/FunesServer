@@ -9,6 +9,11 @@ from database import DatabaseManager
 from llm_handler import LLMHandler
 from config import MEMORY_CONFIG, DB_CONFIG
 import tools  # Import tools module to check tool properties
+import logging
+import traceback
+
+# Get logger for this module
+logger = logging.getLogger('MemoryManager')
 
 class DualMemoryManager:
     def __init__(self, short_term_capacity=None, short_term_ttl_minutes=None):
@@ -28,22 +33,21 @@ class DualMemoryManager:
         
         # Initialize database connection with error checking
         try:
-            print("[DualMemoryManager] Initializing database connection with params:", self.db_params)
+            logger.info("[DualMemoryManager] Initializing database connection with params: %s", self.db_params)
             self.db_manager = DatabaseManager(self.db_params)
-            print("[DualMemoryManager] Database connection initialized successfully")
+            logger.info("[DualMemoryManager] Database connection initialized successfully")
             # Test the connection with a simple query
             try:
                 sources = self.db_manager.get_unique_sources()
-                print(f"[DualMemoryManager] Database connection test successful. Found {len(sources)} sources.")
+                logger.info(f"[DualMemoryManager] Database connection test successful. Found {len(sources)} sources.")
             except Exception as e:
-                print(f"[DualMemoryManager] Database connection test failed: {str(e)}")
+                logger.error(f"[DualMemoryManager] Database connection test failed: {str(e)}")
         except Exception as e:
-            import traceback
-            print(f"[DualMemoryManager] Error initializing database connection: {str(e)}")
-            print(f"[DualMemoryManager] Traceback: {traceback.format_exc()}")
+            logger.error(f"[DualMemoryManager] Error initializing database connection: {str(e)}")
+            logger.error(f"[DualMemoryManager] Traceback: {traceback.format_exc()}")
             # Continue without crashing, but flag the database as unavailable
             self.db_manager = None
-            print("[DualMemoryManager] Continuing with database features disabled")
+            logger.warning("[DualMemoryManager] Continuing with database features disabled")
         
         # Chat history for UI
         self.chat_history = []
@@ -73,18 +77,17 @@ class DualMemoryManager:
         try:
             # Check if database connection is available
             if self.db_manager is None:
-                print("[store_memory] Database connection not available, skipping memory storage")
+                logger.warning("[store_memory] Database connection not available, skipping memory storage")
                 return
                 
-            print(f"[store_memory] Generating embedding for context: {context[:30]}...")
+            logger.info(f"[store_memory] Generating embedding for context: {context[:30]}...")
             embedding = self.llm_handler.get_single_embedding(context)
-            print(f"[store_memory] Embedding generated, storing in database with source: {source}")
+            logger.info(f"[store_memory] Embedding generated, storing in database with source: {source}")
             self.db_manager.insert_memory(context, embedding, source)
-            print("[store_memory] Memory stored successfully")
+            logger.info("[store_memory] Memory stored successfully")
         except Exception as e:
-            import traceback
-            print(f"[store_memory] Error storing memory: {str(e)}")
-            print(f"[store_memory] Traceback: {traceback.format_exc()}")
+            logger.error(f"[store_memory] Error storing memory: {str(e)}")
+            logger.error(f"[store_memory] Traceback: {traceback.format_exc()}")
             # Continue without crashing
     
     def should_store_tool_response(self, tool_name):
@@ -102,20 +105,19 @@ class DualMemoryManager:
         try:
             # Check if database connection is available
             if self.db_manager is None:
-                print("[retrieve_relevant_memories] Database connection not available, returning empty list")
+                logger.warning("[retrieve_relevant_memories] Database connection not available, returning empty list")
                 return []
                 
             top_k = top_k or MEMORY_CONFIG['default_top_k']
-            print(f"[retrieve_relevant_memories] Generating embedding for query: {query[:30]}...")
+            logger.info(f"[retrieve_relevant_memories] Generating embedding for query: {query[:30]}...")
             query_embedding = self.llm_handler.get_single_embedding(query)
-            print(f"[retrieve_relevant_memories] Embedding generated, retrieving top {top_k} memories")
+            logger.info(f"[retrieve_relevant_memories] Embedding generated, retrieving top {top_k} memories")
             memories = self.db_manager.retrieve_memories(query_embedding, top_k)
-            print(f"[retrieve_relevant_memories] Retrieved {len(memories)} memories")
+            logger.info(f"[retrieve_relevant_memories] Retrieved {len(memories)} memories")
             return memories
         except Exception as e:
-            import traceback
-            print(f"[retrieve_relevant_memories] Error retrieving memories: {str(e)}")
-            print(f"[retrieve_relevant_memories] Traceback: {traceback.format_exc()}")
+            logger.error(f"[retrieve_relevant_memories] Error retrieving memories: {str(e)}")
+            logger.error(f"[retrieve_relevant_memories] Traceback: {traceback.format_exc()}")
             # Return empty list in case of error
             return []
  
@@ -141,7 +143,7 @@ class DualMemoryManager:
     def process_chat(self, user_message):
         """Process chat with both short-term and long-term memory"""
         try:
-            print("Starting process_chat with message:", user_message[:30] + "..." if len(user_message) > 30 else user_message)
+            logger.info("Starting process_chat with message: %s", user_message[:30] + "..." if len(user_message) > 30 else user_message)
             
             # Check if this is a tool-related query using our vector embedding system
             is_tool_query = False
@@ -156,27 +158,27 @@ class DualMemoryManager:
                         self.llm_handler.embedding_model,
                         self.llm_handler.db_manager
                     )
-                    print(f"Vector-based tool selection result: is_tool_query={is_tool_query}, tool={suggested_tool or 'None'}")
+                    logger.info(f"Vector-based tool selection result: is_tool_query={is_tool_query}, tool={suggested_tool or 'None'}")
             except Exception as e:
-                print(f"Error in vector-based tool selection: {str(e)}")
+                logger.error(f"Error in vector-based tool selection: {str(e)}")
                 # Fall back to keyword-based detection in case of error
                 is_tool_query = False
             
             # Get relevant long-term memories (only if this isn't a tool query)
-            print("Retrieving relevant memories...")
+            logger.info("Retrieving relevant memories...")
             long_term_memories = []
             try:
                 if not is_tool_query:
                     # Only retrieve memories if this is NOT a tool query
                     long_term_memories = self.retrieve_relevant_memories(user_message)
-                    print(f"Retrieved {len(long_term_memories)} memories")
+                    logger.info(f"Retrieved {len(long_term_memories)} memories")
                 else:
-                    print("Skipping memory retrieval for tool query")
+                    logger.info("Skipping memory retrieval for tool query")
             except Exception as e:
-                print(f"Error retrieving memories: {str(e)}")
+                logger.error(f"Error retrieving memories: {str(e)}")
             
             # Convert short-term memory to the format expected by LLMHandler
-            print("Building conversation history...")
+            logger.info("Building conversation history...")
             conversation_history = []
             try:
                 for msg in self.short_term_memory:
@@ -198,13 +200,13 @@ class DualMemoryManager:
                             entry['name'] = msg['name']
                             
                         conversation_history.append(entry)
-                print(f"Built conversation history with {len(conversation_history)} messages")
+                logger.info(f"Built conversation history with {len(conversation_history)} messages")
             except Exception as e:
-                print(f"Error building conversation history: {str(e)}")
+                logger.error(f"Error building conversation history: {str(e)}")
                 conversation_history = []
             
             # Build additional context string containing only long-term memories
-            print("Building additional context...")
+            logger.info("Building additional context...")
             additional_context = ""
             if long_term_memories:
                 additional_context = "Relevant past memories:\n"
@@ -212,28 +214,27 @@ class DualMemoryManager:
                     additional_context += f"- {memory[0]}\n"
             
             # Add the user message to short-term memory
-            print("Adding user message to short-term memory...")
+            logger.info("Adding user message to short-term memory...")
             self._add_to_short_term('user', user_message)
             
             # Get LLM response using the LLM handler
-            print("Generating LLM response...")
+            logger.info("Generating LLM response...")
             try:
                 llm_response = self.llm_handler.generate_response(
                     user_input=user_message,
                     conversation_history=conversation_history,
                     additional_context=additional_context if additional_context else None
                 )
-                print(f"Received response of type: {type(llm_response)}")
+                logger.info(f"Received response of type: {type(llm_response)}")
             except Exception as e:
-                import traceback
-                print(f"Error generating LLM response: {str(e)}")
-                print(f"Traceback: {traceback.format_exc()}")
+                logger.error(f"Error generating LLM response: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 raise
             
             # Handle response based on whether it's a simple string or a dict with tool calls
-            print("Processing LLM response...")
+            logger.info("Processing LLM response...")
             if isinstance(llm_response, dict) and 'tool_calls' in llm_response:
-                print(f"Response contains tool calls: {llm_response.get('tool_calls')}")
+                logger.info(f"Response contains tool calls: {llm_response.get('tool_calls')}")
                 # Add the assistant message with tool calls
                 self._add_to_short_term_with_tool_calls('assistant', llm_response['content'], llm_response['tool_calls'])
                 
@@ -245,11 +246,11 @@ class DualMemoryManager:
                 self.chat_history.append((user_message, display_response))
                 
                 # Don't store tool-related interactions in long-term memory
-                print("Skipping memory storage for tool interaction")
+                logger.info("Skipping memory storage for tool interaction")
                 
                 return display_response
             else:
-                print("Response is a simple text response")
+                logger.info("Response is a simple text response")
                 # Just a regular text response
                 self._add_to_short_term('assistant', llm_response)
                 self.chat_history.append((user_message, llm_response))
@@ -257,15 +258,15 @@ class DualMemoryManager:
                 # Only store in long-term memory if this is NOT a tool interaction
                 if not is_tool_query:
                     # Store user message in long-term memory
-                    print("Storing user message memory...")
+                    logger.info("Storing user message memory...")
                     try:
                         self.store_memory(user_message)
-                        print("User message stored successfully")
+                        logger.info("User message stored successfully")
                     except Exception as e:
-                        print(f"Error storing user message: {str(e)}")
+                        logger.error(f"Error storing user message: {str(e)}")
                     
                     # Store assistant response in long-term memory (if not a tool response)
-                    print("Storing assistant response memory...")
+                    logger.info("Storing assistant response memory...")
                     try:
                         # Check if this looks like a tool response by analyzing content
                         tool_response_patterns = [
@@ -281,20 +282,19 @@ class DualMemoryManager:
                         
                         if not looks_like_tool_response:
                             self.store_memory(llm_response)
-                            print("Memory stored successfully")
+                            logger.info("Memory stored successfully")
                         else:
-                            print("Response looks like tool output, skipping memory storage")
+                            logger.info("Response looks like tool output, skipping memory storage")
                     except Exception as e:
-                        print(f"Error storing memory: {str(e)}")
+                        logger.error(f"Error storing memory: {str(e)}")
                 else:
-                    print("Skipping memory storage for tool query response")
+                    logger.info("Skipping memory storage for tool query response")
                 
                 return llm_response
                 
         except Exception as e:
-            import traceback
             error_msg = f"Error processing request: {str(e)}\n{traceback.format_exc()}"
-            print(error_msg)  # For logging
+            logger.error(error_msg)  # For logging
             return error_msg
     
     def _add_to_short_term_with_tool_calls(self, role, content, tool_calls):
