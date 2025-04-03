@@ -72,14 +72,61 @@ class EmbeddingManager:
         except Exception as e:
             self.logger.error(f"Error generating batch embeddings: {str(e)}")
             return [[0.0] * 384 for _ in texts]  # Return zero vectors
+            
+    def store_tool_embeddings(self, tools, db_manager):
+        """
+        Initialize or update embeddings for all available tools
+        
+        Args:
+            tools: List of tool definitions
+            db_manager: Database manager to store embeddings
+        """
+        self.logger.info("Initializing tool embeddings...")
+        
+        for tool in tools:
+            if "function" in tool:
+                function = tool["function"]
+                name = function.get("name", "").lower()
+                
+                if name:
+                    # Extract all relevant information about the tool
+                    description = function.get("description", "")
+                    parameters = function.get("parameters", {})
+                    
+                    if description and self.embedding_model is not None:
+                        try:
+                            # Create an enhanced description that includes parameter information
+                            enhanced_description = description + "\n"
+                            if parameters and isinstance(parameters, dict) and "properties" in parameters:
+                                enhanced_description += "Parameters:\n"
+                                for param_name, param_info in parameters.get("properties", {}).items():
+                                    param_desc = param_info.get("description", "")
+                                    enhanced_description += f"- {param_name}: {param_desc}\n"
+                            
+                            # Generate embedding for the enhanced description
+                            self.logger.info(f"Generating embedding for tool: {name}")
+                            embedding = self.embedding_model.encode(enhanced_description)
+                            
+                            # Store in database
+                            db_manager.store_tool_embedding(name, enhanced_description, embedding)
+                            self.logger.info(f"Stored embedding for tool: {name}")
+                        except Exception as e:
+                            self.logger.error(f"Error generating/storing embedding for tool {name}: {str(e)}")
+        
+        self.logger.info("Tool embeddings initialization complete")
 
-# Create a singleton instance for global use
+# Create singleton instance for global use
 embedding_manager = EmbeddingManager()
 
 # Expose direct function for ease of use
 def get_embedding(text):
     """Global function to get embeddings from the embedding manager"""
     return embedding_manager.get_embedding(text)
+
+# Expose function for initializing tool embeddings
+def initialize_tool_embeddings(tools, db_manager):
+    """Initialize embeddings for tools using the embedding manager"""
+    embedding_manager.store_tool_embeddings(tools, db_manager)
 
 class DualMemoryManager:
     def __init__(self, short_term_capacity=None, short_term_ttl_minutes=None):

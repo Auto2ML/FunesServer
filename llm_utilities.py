@@ -28,14 +28,12 @@ def format_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     
     return formatted_messages
 
-def extract_tool_information(tools: List[Dict[str, Any]], embedding_model=None, db_manager=None) -> Dict[str, Dict[str, Any]]:
+def extract_tool_information(tools: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """
-    Extract comprehensive information about available tools and optionally generate embeddings
+    Extract comprehensive information about available tools
     
     Args:
         tools: List of tool definitions
-        embedding_model: Optional SentenceTransformer model for generating embeddings
-        db_manager: Optional database manager to store embeddings
         
     Returns:
         Dictionary mapping tool names to their information including description,
@@ -68,53 +66,13 @@ def extract_tool_information(tools: List[Dict[str, Any]], embedding_model=None, 
                     "parameters": parameters,
                     "keywords": list(keywords)
                 }
-                
-                # If embedding_model is provided, generate and store embeddings
-                if embedding_model is not None and description and db_manager is not None:
-                    try:
-                        # Create an enhanced description that includes parameter information
-                        enhanced_description = description + "\n"
-                        if parameters and isinstance(parameters, dict) and "properties" in parameters:
-                            enhanced_description += "Parameters:\n"
-                            for param_name, param_info in parameters.get("properties", {}).items():
-                                param_desc = param_info.get("description", "")
-                                enhanced_description += f"- {param_name}: {param_desc}\n"
-                        
-                        # Generate embedding for the enhanced description
-                        print(f"Generating embedding for tool: {name}")
-                        embedding = embedding_model.encode(enhanced_description)
-                        
-                        # Store in database
-                        db_manager.store_tool_embedding(name, enhanced_description, embedding)
-                        print(f"Stored embedding for tool: {name}")
-                    except Exception as e:
-                        print(f"Error generating/storing embedding for tool {name}: {str(e)}")
     
     return tool_info
-
-def initialize_tool_embeddings(tools: List[Dict[str, Any]], embedding_model, db_manager) -> None:
-    """
-    Initialize or update embeddings for all available tools
-    
-    Args:
-        tools: List of tool definitions
-        embedding_model: SentenceTransformer model for generating embeddings
-        db_manager: Database manager to store embeddings
-    """
-    print("Initializing tool embeddings...")
-    
-    # Process each tool and generate/store embeddings
-    extract_tool_information(tools, embedding_model, db_manager)
-    
-    print("Tool embeddings initialization complete")
 
 def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
     """
     Determine if tools should be used and which specific tool might be needed
-    
-    This function uses a more nuanced analysis of the user query and available tools
-    to make intelligent decisions about tool usage. It dynamically adapts to custom tools
-    created through the generic tool framework.
+    using keyword-based matching.
     
     Args:
         messages: Conversation history
@@ -247,7 +205,7 @@ def should_use_tools_vector(query: str, embedding_model, db_manager, similarity_
     
     Args:
         query: User's query text
-        embedding_model: SentenceTransformer model for generating query embedding
+        embedding_model: SentenceTransformer model for generating query embedding (can be None)
         db_manager: Database manager for retrieving similar tools
         similarity_threshold: Threshold for considering a tool match (0.0 to 1.0)
         
@@ -255,12 +213,18 @@ def should_use_tools_vector(query: str, embedding_model, db_manager, similarity_
         Tuple of (should_use, tool_name) where tool_name can be None if no specific tool is identified
     """
     try:
-        print(f"[should_use_tools_vector] Analyzing query: {query[:30]}...")
+        # Get logger for this function
+        import logging
+        logger = logging.getLogger('ToolSelector')
+        
+        logger.info(f"Analyzing query for tool selection: {query[:30]}...")
         
         # Generate embedding for the query
-        query_embedding = embedding_model.encode(query)
+        from memory_manager import get_embedding
+        query_embedding = get_embedding(query)
         
         # Find similar tools based on vector similarity
+        logger.info(f"Finding similar tools with similarity threshold {similarity_threshold}")
         similar_tools = db_manager.find_similar_tools(
             query_embedding=query_embedding,
             similarity_threshold=similarity_threshold
@@ -269,24 +233,30 @@ def should_use_tools_vector(query: str, embedding_model, db_manager, similarity_
         if similar_tools and len(similar_tools) > 0:
             # Get the most similar tool and its similarity score
             best_tool, description, similarity = similar_tools[0]
-            print(f"[should_use_tools_vector] Best tool match: {best_tool} (similarity: {similarity:.4f})")
+            logger.info(f"Best tool match: {best_tool} (similarity: {similarity:.4f})")
+            
+            # Log more details about the top match
+            logger.debug(f"Tool description: {description[:100]}...")
             
             # Return the tool if similarity is above threshold
             if similarity >= similarity_threshold:
+                logger.info(f"Selected tool '{best_tool}' with similarity {similarity:.4f}")
                 return True, best_tool
             else:
                 # We found tools but they're not similar enough
-                print(f"[should_use_tools_vector] Best tool similarity {similarity:.4f} below threshold {similarity_threshold}")
+                logger.info(f"Best tool similarity {similarity:.4f} below threshold {similarity_threshold}")
                 return False, None
         else:
             # No similar tools found
-            print("[should_use_tools_vector] No similar tools found")
+            logger.info("No similar tools found in database")
             return False, None
             
     except Exception as e:
         import traceback
-        print(f"[should_use_tools_vector] Error: {str(e)}")
-        print(f"[should_use_tools_vector] Traceback: {traceback.format_exc()}")
+        import logging
+        logger = logging.getLogger('ToolSelector')
+        logger.error(f"Error during tool selection: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         # Fall back to no tool use in case of error
         return False, None
 

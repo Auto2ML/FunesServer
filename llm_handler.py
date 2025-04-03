@@ -1,6 +1,4 @@
 import ollama
-# Remove the direct import of SentenceTransformer since we'll now use memory_manager
-# from sentence_transformers import SentenceTransformer
 from config import LLM_CONFIG, EMBEDDING_CONFIG, LOGGING_CONFIG
 import abc
 import json
@@ -13,8 +11,6 @@ import tools  # Import the new tools package
 from llm_utilities import format_messages, extract_tool_information, should_use_tools, extract_tool_calls_from_response, enhance_tool_response, should_use_tools_vector
 import logging
 import datetime
-# Import embedding functionality from memory_manager
-from memory_manager import get_embedding
 
 # Configure logging system
 def setup_logging(level=logging.INFO, enable_logging=True):
@@ -51,10 +47,9 @@ setup_logging(
 llm_logger = logging.getLogger('LLMHandler')
 backend_logger = logging.getLogger('LLMBackend')
 
-# Add LLMHandler class to fix the missing integration with memory_manager.py
 class LLMHandler:
     """
-    Main handler class for LLM operations, including response generation and embeddings.
+    Main handler class for LLM operations, including response generation.
     This class interfaces with various backends based on configuration.
     """
     
@@ -65,27 +60,25 @@ class LLMHandler:
         
         # Initialize configuration parameters
         self.config = LLM_CONFIG
-        self.embedding_config = EMBEDDING_CONFIG
-        
-        # Set up the LLM backend
-        self.backend = self._initialize_backend()
         
         # Optional references for vector-based tool selection
         self.vector_tool_selection = self.config.get('vector_tool_selection', False)
-        self.db_manager = None  # Will be set externally if needed
-        self.embedding_model = None  # Will be accessed from memory_manager
+        self.db_manager = None  # Will be set externally by memory_manager
+        
+        # Set up the LLM backend
+        self.backend = self._initialize_backend()
     
     def _initialize_backend(self) -> 'LLMBackend':
         """Initialize the appropriate LLM backend based on configuration"""
         backend_name = self.config.get('backend', 'ollama')
         self.logger.info(f"[LLMHandler] Initializing backend: {backend_name}")
         
-        try:
-            if backend_name.lower() == 'ollama':
-                model_name = self.config.get('model_name', 'llama3')
-                backend = OllamaBackend(model_name)
-                backend._llm_handler = self  # Set reference back to this handler
-                return backend
+        
+        if backend_name.lower() == 'ollama':
+            model_name = self.config.get('model_name', 'llama3')
+            backend = OllamaBackend(model_name)
+            backend._llm_handler = self  # Set reference back to this handler
+            return backend
             
             # Commenting out all non-Ollama backends
             # elif backend_name.lower() == 'llamacpp':
@@ -104,28 +97,12 @@ class LLMHandler:
             #     backend._llm_handler = self  # Set reference back to this handler
             #     return backend
                 
-            else:
-                self.logger.error(f"[LLMHandler] Unknown backend type: {backend_name}")
-                self.logger.info("[LLMHandler] Falling back to Ollama backend")
-                backend = OllamaBackend(self.config.get('model_name', 'llama3'))
-                backend._llm_handler = self  # Set reference back to this handler
-                return backend
-    
-    def set_embedding_model(self, model):
-        """Set the embedding model reference"""
-        self.embedding_model = model
-        self.logger.info("[LLMHandler] Embedding model reference set")
-    
-    # Use the embedding functionality from memory_manager.py
-    def get_single_embedding(self, text: str) -> list:
-        """Generate an embedding vector for a single text string"""
-        try:
-            self.logger.debug(f"[LLMHandler] Generating embedding for text: {text[:30]}...")
-            embedding = get_embedding(text)
-            return embedding
-        except Exception as e:
-            self.logger.error(f"[LLMHandler] Error generating embedding: {str(e)}")
-            return [0.0] * 384  # Return a zero vector of default size
+        else:
+            self.logger.error(f"[LLMHandler] Unknown backend type: {backend_name}")
+            self.logger.info("[LLMHandler] Falling back to Ollama backend")
+            backend = OllamaBackend(self.config.get('model_name', 'llama3'))
+            backend._llm_handler = self  # Set reference back to this handler
+            return backend
     
     def generate_response(self, user_input: str, conversation_history: List[Dict[str, Any]], 
                           additional_context: str = None,
@@ -347,13 +324,12 @@ class OllamaBackend(LLMBackend):
                 suggested_tool = None
                 
                 # Only use vector-based tool selection if we have the necessary components
-                if (llm_handler and hasattr(llm_handler, "embedding_model") and 
-                    llm_handler.embedding_model and llm_handler.db_manager):
+                if llm_handler and hasattr(llm_handler, "db_manager") and llm_handler.db_manager:
                     try:
-                        # Use vector-based tool selection
+                        # Use vector-based tool selection with the embedding from memory_manager
                         should_use_tool, suggested_tool = should_use_tools_vector(
                             latest_user_msg, 
-                            llm_handler.embedding_model, 
+                            None,  # We'll use get_embedding directly
                             llm_handler.db_manager,
                             similarity_threshold=0.70  # Adjust threshold to be more permissive
                         )
@@ -471,7 +447,7 @@ class LlamaCppBackend(LLMBackend):
         self.logger.info(f"Initialized for model: {model_path}")
         
     def _get_llm(self, chat_format="chatml"):
-        """Get or create a llama.cpp instance with the specified chat format"""
+        # Get or create a llama.cpp instance with the specified chat format
         if chat_format not in self._llm_instances:
             self.logger.info(f"Creating new llm instance with format: {chat_format}")
             try:
@@ -532,11 +508,11 @@ class LlamaCppBackend(LLMBackend):
             
             # Try to get LLM handler reference to use vector-based tool selection
             llm_handler = getattr(self, "_llm_handler", None)
-            if hasattr(llm_handler, "vector_tool_selection") and llm_handler.vector_tool_selection and latest_user_msg:
+            if hasattr(llm_handler, "db_manager") and llm_handler.db_manager and latest_user_msg:
                 # Use vector-based tool selection
                 should_use_function_calling, suggested_tool = should_use_tools_vector(
                     latest_user_msg,
-                    llm_handler.embedding_model,
+                    None,  # Use memory_manager.get_embedding directly
                     llm_handler.db_manager
                 )
                 self.logger.info(f"Vector-based tool selection result: use={should_use_function_calling}, tool={suggested_tool or 'None'}")

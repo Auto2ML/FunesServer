@@ -140,6 +140,54 @@ def execute_tool_call(tool_call: Dict[str, Any]) -> str:
     except Exception as e:
         return f"Error executing tool '{tool_name}': {str(e)}"
 
+# Store embeddings for tools in database
+def store_tools_in_database() -> None:
+    """
+    Store all registered tools in the database with their embeddings.
+    This allows for vector-based tool selection.
+    """
+    try:
+        # Import here to avoid circular imports
+        from config import DB_CONFIG, EMBEDDING_CONFIG
+        from database import DatabaseManager
+        from sentence_transformers import SentenceTransformer
+        import json
+        
+        print("Initializing tool embeddings in database...")
+        
+        # Load embedding model directly instead of importing from memory_manager
+        model_name = EMBEDDING_CONFIG.get('model_name', 'all-MiniLM-L6-v2')
+        embedding_model = SentenceTransformer(model_name)
+        
+        # Connect to the database
+        db_manager = DatabaseManager(DB_CONFIG)
+        
+        # Process each registered tool
+        for tool_name, tool in _registered_tools.items():
+            # Create an enhanced description including parameters
+            enhanced_description = tool.description + "\n"
+            if hasattr(tool, "parameters") and tool.parameters:
+                enhanced_description += "Parameters:\n"
+                if "properties" in tool.parameters:
+                    for param_name, param_info in tool.parameters["properties"].items():
+                        param_desc = param_info.get("description", "")
+                        enhanced_description += f"- {param_name}: {param_desc}\n"
+            
+            # Generate embedding for the enhanced description
+            print(f"Generating embedding for tool: {tool_name}")
+            embedding = embedding_model.encode(enhanced_description)
+            
+            # Store in database
+            db_manager.store_tool_embedding(tool_name, enhanced_description, embedding.tolist())
+            print(f"Stored embedding for tool: {tool_name}")
+            
+        print("Tool embeddings stored in database successfully")
+    except Exception as e:
+        print(f"Error storing tool embeddings: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        # Continue without crashing - this is non-critical functionality
+
 # Auto-discover and load tools from this directory
 def _discover_tools() -> None:
     """Discover and import all tools in the tools directory"""
@@ -168,6 +216,9 @@ def _discover_tools() -> None:
                             print(f"Error registering tool from {filename}: {str(e)}")
             except Exception as e:
                 print(f"Error loading tool module {module_name}: {str(e)}")
+    
+    # After registering all tools, store them in database
+    store_tools_in_database()
 
 # Call the discovery function when the module is imported
 _discover_tools()
