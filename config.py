@@ -19,12 +19,7 @@ LLM_CONFIG = {
         'gemma',
         'llama2:latest',
         'llamafile with llama-3-8b or llama-3-70b'  # Llamafile models also support tools
-    ],
-    # Logging configuration
-    'log_level': 'INFO',  # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
-    'enable_logging': True,  # Set to False to disable all logging
-    'log_format': '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-    'log_date_format': '%Y-%m-%d %H:%M:%S'
+    ]
 }
 
 # Embedding model configuration

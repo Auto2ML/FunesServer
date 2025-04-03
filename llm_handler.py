@@ -1,6 +1,7 @@
 import ollama
-from sentence_transformers import SentenceTransformer
-from config import LLM_CONFIG, EMBEDDING_CONFIG
+# Remove the direct import of SentenceTransformer since we'll now use memory_manager
+# from sentence_transformers import SentenceTransformer
+from config import LLM_CONFIG, EMBEDDING_CONFIG, LOGGING_CONFIG
 import abc
 import json
 import requests
@@ -12,6 +13,8 @@ import tools  # Import the new tools package
 from llm_utilities import format_messages, extract_tool_information, should_use_tools, extract_tool_calls_from_response, enhance_tool_response, should_use_tools_vector
 import logging
 import datetime
+# Import embedding functionality from memory_manager
+from memory_manager import get_embedding
 
 # Configure logging system
 def setup_logging(level=logging.INFO, enable_logging=True):
@@ -38,16 +41,156 @@ def setup_logging(level=logging.INFO, enable_logging=True):
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-# Initialize logging with default settings
-# This can be changed later through config or programmatically
+# Initialize logging with settings from LOGGING_CONFIG
 setup_logging(
-    level=getattr(logging, LLM_CONFIG.get('log_level', 'INFO')),
-    enable_logging=LLM_CONFIG.get('enable_logging', True)
+    level=getattr(logging, LOGGING_CONFIG.get('level', logging.INFO)),
+    enable_logging=LOGGING_CONFIG.get('enable', True)
 )
 
 # Create logger instances for different components
 llm_logger = logging.getLogger('LLMHandler')
 backend_logger = logging.getLogger('LLMBackend')
+
+# Add LLMHandler class to fix the missing integration with memory_manager.py
+class LLMHandler:
+    """
+    Main handler class for LLM operations, including response generation and embeddings.
+    This class interfaces with various backends based on configuration.
+    """
+    
+    def __init__(self):
+        # Initialize logger
+        self.logger = llm_logger
+        self.logger.info("[LLMHandler] Initializing...")
+        
+        # Initialize configuration parameters
+        self.config = LLM_CONFIG
+        self.embedding_config = EMBEDDING_CONFIG
+        
+        # Set up the LLM backend
+        self.backend = self._initialize_backend()
+        
+        # Optional references for vector-based tool selection
+        self.vector_tool_selection = self.config.get('vector_tool_selection', False)
+        self.db_manager = None  # Will be set externally if needed
+        self.embedding_model = None  # Will be accessed from memory_manager
+    
+    def _initialize_backend(self) -> 'LLMBackend':
+        """Initialize the appropriate LLM backend based on configuration"""
+        backend_name = self.config.get('backend', 'ollama')
+        self.logger.info(f"[LLMHandler] Initializing backend: {backend_name}")
+        
+        try:
+            if backend_name.lower() == 'ollama':
+                model_name = self.config.get('model_name', 'llama3')
+                backend = OllamaBackend(model_name)
+                backend._llm_handler = self  # Set reference back to this handler
+                return backend
+                
+            elif backend_name.lower() == 'llamacpp':
+                model_path = self.config.get('model_path', 'models/llama.gguf')
+                context_size = self.config.get('context_size', 4096)
+                temperature = self.config.get('temperature', 0.7)
+                max_tokens = self.config.get('max_tokens', 1024)
+                backend = LlamaCppBackend(model_path, context_size, temperature, max_tokens)
+                backend._llm_handler = self  # Set reference back to this handler
+                return backend
+                
+            elif backend_name.lower() == 'llamafile':
+                model_name = self.config.get('model_name', 'LLaMA_CPP')
+                api_url = self.config.get('api_url', 'http://localhost:8080/v1')
+                backend = LlamafileBackend(model_name, api_url)
+                backend._llm_handler = self  # Set reference back to this handler
+                return backend
+                
+            else:
+                self.logger.error(f"[LLMHandler] Unknown backend type: {backend_name}")
+                self.logger.info("[LLMHandler] Falling back to Ollama backend")
+                backend = OllamaBackend(self.config.get('model_name', 'llama3'))
+                backend._llm_handler = self  # Set reference back to this handler
+                return backend
+                
+        except Exception as e:
+            self.logger.error(f"[LLMHandler] Error initializing backend: {str(e)}")
+            raise
+    
+    def set_embedding_model(self, model):
+        """Set the embedding model reference"""
+        self.embedding_model = model
+        self.logger.info("[LLMHandler] Embedding model reference set")
+    
+    # Use the embedding functionality from memory_manager.py
+    def get_single_embedding(self, text: str) -> list:
+        """Generate an embedding vector for a single text string"""
+        try:
+            self.logger.debug(f"[LLMHandler] Generating embedding for text: {text[:30]}...")
+            embedding = get_embedding(text)
+            return embedding
+        except Exception as e:
+            self.logger.error(f"[LLMHandler] Error generating embedding: {str(e)}")
+            return [0.0] * 384  # Return a zero vector of default size
+    
+    def generate_response(self, user_input: str, conversation_history: List[Dict[str, Any]], 
+                          additional_context: str = None,
+                          include_tools: bool = True) -> Union[str, Dict[str, Any]]:
+        """Generate a response using the configured LLM backend"""
+        try:
+            # Create a new copy of the conversation history
+            messages = conversation_history.copy() if conversation_history else []
+            
+            # Check if there's already a system message
+            has_system = False
+            for msg in messages:
+                if msg.get('role') == 'system':
+                    has_system = True
+                    # If additional context is provided, append it to existing system message
+                    if additional_context:
+                        msg['content'] += f"\n\nAdditional context: {additional_context}"
+                    break
+            
+            # Add system message with system prompt from config if none exists
+            if not has_system:
+                system_content = self.config.get('system_prompt', "You are a helpful assistant.")
+                if additional_context:
+                    system_content += f"\n\nAdditional context: {additional_context}"
+                
+                messages.insert(0, {
+                    'role': 'system',
+                    'content': system_content
+                })
+            
+            # Add the latest user message if not already in conversation history
+            if user_input and (not messages or messages[-1].get('role') != 'user'):
+                messages.append({
+                    'role': 'user',
+                    'content': user_input
+                })
+            
+            # Get available tools if requested
+            available_tools = None
+            if include_tools:
+                try:
+                    available_tools = tools.get_available_tools() 
+                    self.logger.info(f"[LLMHandler] Including {len(available_tools)} tools in request")
+                except Exception as e:
+                    self.logger.warning(f"[LLMHandler] Error getting tools: {str(e)}")
+            
+            # Generate the response
+            self.logger.info("[LLMHandler] Generating response...")
+            response = self.backend.generate(messages, available_tools)
+            
+            # Check if this is a tool call that needs processing
+            if response.get('tool_calls'):
+                self.logger.info(f"[LLMHandler] Response contains {len(response['tool_calls'])} tool calls")
+                # Return the full response including tool calls for further processing
+                return response
+            else:
+                # Return just the content for simple text responses
+                return response.get('content', "I couldn't generate a response.")
+                
+        except Exception as e:
+            self.logger.error(f"[LLMHandler] Error generating response: {str(e)}")
+            return f"Sorry, I encountered an error: {str(e)}"
 
 # Utility functions for backend implementations have been moved to llm_utilities.py
 
@@ -56,6 +199,7 @@ class LLMBackend(abc.ABC):
     
     def __init__(self):
         self.logger = logging.getLogger(f'LLMBackend.{self.__class__.__name__}')
+        self._llm_handler = None  # Reference to the LLM handler, set externally
     
     @abc.abstractmethod
     def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:

@@ -6,14 +6,80 @@ import re  # Add missing import for regular expressions
 from collections import deque
 from datetime import datetime, timedelta
 from database import DatabaseManager
-from llm_handler import LLMHandler
-from config import MEMORY_CONFIG, DB_CONFIG
+from config import MEMORY_CONFIG, DB_CONFIG, EMBEDDING_CONFIG
 import tools  # Import tools module to check tool properties
 import logging
 import traceback
+from sentence_transformers import SentenceTransformer
 
 # Get logger for this module
 logger = logging.getLogger('MemoryManager')
+
+class EmbeddingManager:
+    """
+    Manages embedding operations for text-to-vector conversion.
+    This class centralizes all embedding functionality.
+    """
+    
+    def __init__(self):
+        # Initialize logger
+        self.logger = logging.getLogger('EmbeddingManager')
+        self.logger.info("Initializing embedding manager")
+        
+        # Initialize configuration parameters
+        self.embedding_config = EMBEDDING_CONFIG
+        
+        # Initialize the embedding model
+        self.embedding_model = None
+        self.initialize_embedding_model()
+    
+    def initialize_embedding_model(self):
+        """Initialize the embedding model based on configuration"""
+        try:
+            model_name = self.embedding_config.get('model', 'all-MiniLM-L6-v2')
+            self.logger.info(f"Loading embedding model: {model_name}")
+            self.embedding_model = SentenceTransformer(model_name)
+            self.logger.info("Embedding model loaded successfully")
+        except Exception as e:
+            self.logger.error(f"Error loading embedding model: {str(e)}")
+            self.logger.error("Embeddings will not be available!")
+            self.embedding_model = None
+    
+    def get_embedding(self, text):
+        """Generate an embedding vector for a single text string"""
+        if self.embedding_model is None:
+            self.logger.error("Cannot generate embedding: model not available")
+            return [0.0] * 384  # Return a zero vector of default size
+            
+        try:
+            self.logger.debug(f"Generating embedding for text: {text[:30]}...")
+            embedding = self.embedding_model.encode(text)
+            return embedding.tolist()
+        except Exception as e:
+            self.logger.error(f"Error generating embedding: {str(e)}")
+            return [0.0] * 384  # Return a zero vector of default size
+    
+    def get_batch_embeddings(self, texts):
+        """Generate embedding vectors for multiple text strings"""
+        if self.embedding_model is None:
+            self.logger.error("Cannot generate embeddings: model not available")
+            return [[0.0] * 384 for _ in texts]  # Return zero vectors
+            
+        try:
+            self.logger.debug(f"Generating batch embeddings for {len(texts)} texts")
+            embeddings = self.embedding_model.encode(texts)
+            return [embedding.tolist() for embedding in embeddings]
+        except Exception as e:
+            self.logger.error(f"Error generating batch embeddings: {str(e)}")
+            return [[0.0] * 384 for _ in texts]  # Return zero vectors
+
+# Create a singleton instance for global use
+embedding_manager = EmbeddingManager()
+
+# Expose direct function for ease of use
+def get_embedding(text):
+    """Global function to get embeddings from the embedding manager"""
+    return embedding_manager.get_embedding(text)
 
 class DualMemoryManager:
     def __init__(self, short_term_capacity=None, short_term_ttl_minutes=None):
@@ -24,12 +90,8 @@ class DualMemoryManager:
         short_term_capacity = short_term_capacity or MEMORY_CONFIG['short_term_capacity']
         short_term_ttl_minutes = short_term_ttl_minutes or MEMORY_CONFIG['short_term_ttl_minutes']
         
-        # Initialize LLM handler
-        self.llm_handler = LLMHandler()
-        
-        # Short-term memory setup
-        self.short_term_memory = deque(maxlen=short_term_capacity)
-        self.short_term_ttl = timedelta(minutes=short_term_ttl_minutes)
+        # Use the embedding manager
+        self.embedding_manager = embedding_manager
         
         # Initialize database connection with error checking
         try:
@@ -54,6 +116,14 @@ class DualMemoryManager:
         
         # Thread-safe queue for processing
         self.message_queue = queue.Queue()
+        
+        # Import LLM handler here to avoid circular imports
+        from llm_handler import LLMHandler
+        self.llm_handler = LLMHandler()
+        
+        # Short-term memory setup
+        self.short_term_memory = deque(maxlen=short_term_capacity)
+        self.short_term_ttl = timedelta(minutes=short_term_ttl_minutes)
     
     def _add_to_short_term(self, role, content):
         """Add a message to short-term memory with timestamp"""
@@ -81,7 +151,7 @@ class DualMemoryManager:
                 return
                 
             logger.info(f"[store_memory] Generating embedding for context: {context[:30]}...")
-            embedding = self.llm_handler.get_single_embedding(context)
+            embedding = self.embedding_manager.get_embedding(context)
             logger.info(f"[store_memory] Embedding generated, storing in database with source: {source}")
             self.db_manager.insert_memory(context, embedding, source)
             logger.info("[store_memory] Memory stored successfully")
@@ -110,7 +180,7 @@ class DualMemoryManager:
                 
             top_k = top_k or MEMORY_CONFIG['default_top_k']
             logger.info(f"[retrieve_relevant_memories] Generating embedding for query: {query[:30]}...")
-            query_embedding = self.llm_handler.get_single_embedding(query)
+            query_embedding = self.embedding_manager.get_embedding(query)
             logger.info(f"[retrieve_relevant_memories] Embedding generated, retrieving top {top_k} memories")
             memories = self.db_manager.retrieve_memories(query_embedding, top_k)
             logger.info(f"[retrieve_relevant_memories] Retrieved {len(memories)} memories")
@@ -155,8 +225,8 @@ class DualMemoryManager:
                     from llm_utilities import should_use_tools_vector
                     is_tool_query, suggested_tool = should_use_tools_vector(
                         user_message,
-                        self.llm_handler.embedding_model,
-                        self.llm_handler.db_manager
+                        self.embedding_manager.embedding_model,
+                        self.db_manager
                     )
                     logger.info(f"Vector-based tool selection result: is_tool_query={is_tool_query}, tool={suggested_tool or 'None'}")
             except Exception as e:
