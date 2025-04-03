@@ -38,6 +38,13 @@ class WeatherTool(GenericTool):
             "required": ["location"]
         }
     
+    @property
+    def store_in_memory(self) -> bool:
+        """
+        Weather responses should not be stored in memory as they are time-dependent.
+        """
+        return False
+    
     def execute(self, location: str, format: str = "celsius") -> str:
         """
         Get the weather for the specified location.

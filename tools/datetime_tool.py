@@ -38,6 +38,13 @@ class DateTimeTool(GenericTool):
             "required": []
         }
     
+    @property
+    def store_in_memory(self) -> bool:
+        """
+        Date and time responses should not be stored in memory as they are time-dependent.
+        """
+        return False
+    
     def execute(self, timezone: Optional[str] = None, format: str = "full") -> str:
         """
         Get the current date and time.

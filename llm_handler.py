@@ -1,6 +1,6 @@
 import ollama
 from sentence_transformers import SentenceTransformer
-from config import LLM_CONFIG, EMBEDDING_CONFIG, TOOL_CONFIG
+from config import LLM_CONFIG, EMBEDDING_CONFIG
 import abc
 import json
 import requests

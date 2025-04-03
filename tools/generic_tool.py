@@ -63,6 +63,18 @@ class GenericTool(ABC):
         """
         pass
     
+    @property
+    def store_in_memory(self) -> bool:
+        """
+        Whether responses from this tool should be stored in long-term memory.
+        Default is False since most tool responses are time-dependent or transient.
+        Override this method in tool implementations that should be stored.
+        
+        Returns:
+            Boolean indicating if tool responses should be stored in the database
+        """
+        return False
+    
     @abstractmethod
     def execute(self, **kwargs) -> str:
         """

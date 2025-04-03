@@ -2,11 +2,13 @@ import os
 import json
 import threading
 import queue
+import re  # Add missing import for regular expressions
 from collections import deque
 from datetime import datetime, timedelta
 from database import DatabaseManager
 from llm_handler import LLMHandler
 from config import MEMORY_CONFIG, DB_CONFIG
+import tools  # Import tools module to check tool properties
 
 class DualMemoryManager:
     def __init__(self, short_term_capacity=None, short_term_ttl_minutes=None):
@@ -84,6 +86,16 @@ class DualMemoryManager:
             print(f"[store_memory] Error storing memory: {str(e)}")
             print(f"[store_memory] Traceback: {traceback.format_exc()}")
             # Continue without crashing
+    
+    def should_store_tool_response(self, tool_name):
+        """Check if a tool response should be stored in long-term memory"""
+        # Get the tool by name
+        tool = tools.get_tool(tool_name)
+        if tool:
+            # Check if the tool wants its responses stored in memory
+            return tool.store_in_memory
+        # Default to False if tool not found
+        return False
     
     def retrieve_relevant_memories(self, query, top_k=None):
         """Retrieve relevant memories from long-term storage"""
@@ -211,12 +223,51 @@ class DualMemoryManager:
                 self._add_to_short_term('assistant', llm_response)
                 self.chat_history.append((user_message, llm_response))
                 
-                # Store in long-term memory
-                print("Storing memory...")
+                # Store user message in long-term memory
+                print("Storing user message memory...")
                 try:
                     self.store_memory(user_message)
-                    self.store_memory(llm_response)
-                    print("Memory stored successfully")
+                    print("User message stored successfully")
+                except Exception as e:
+                    print(f"Error storing user message: {str(e)}")
+                
+                # Store assistant response in long-term memory
+                # For regular text responses, we always store them
+                print("Storing assistant response memory...")
+                try:
+                    # Check if this is a tool response by looking for common patterns
+                    is_tool_response = False
+                    tool_name = None
+                    
+                    # Look for patterns indicating this is a tool response
+                    tool_patterns = [
+                        r"Tool response from (\w+):",
+                        r"I used the (\w+) tool",
+                        r"According to the (\w+) tool",
+                        r"Based on the (\w+) tool",
+                        r"The (\w+) tool returned"
+                    ]
+                    
+                    for pattern in tool_patterns:
+                        match = re.search(pattern, llm_response)
+                        if match:
+                            is_tool_response = True
+                            tool_name = match.group(1)
+                            print(f"Detected tool response from {tool_name}")
+                            break
+                    
+                    # If this is a tool response, check if we should store it
+                    if is_tool_response and tool_name:
+                        should_store = self.should_store_tool_response(tool_name)
+                        if should_store:
+                            print(f"Tool {tool_name} allows storing responses, storing in memory")
+                            self.store_memory(llm_response)
+                        else:
+                            print(f"Tool {tool_name} does not allow storing responses, skipping memory storage")
+                    else:
+                        # It's a regular assistant response, store it
+                        self.store_memory(llm_response)
+                        print("Memory stored successfully")
                 except Exception as e:
                     print(f"Error storing memory: {str(e)}")
                 

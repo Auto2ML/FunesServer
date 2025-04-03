@@ -3,7 +3,7 @@ Configuration settings for Funes server
 """
 # LLM model configuration
 LLM_CONFIG = {
-    'model_name': 'llama3.2:latest',
+    'model_name': 'llama3.2:1b',
     'backend_type': 'ollama',  # Options: 'ollama', 'llamacpp', 'huggingface', 'llamafile'
     #'model_name': '/home/julio/.ollama/models/blobs/sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff',
     'llamafile_api_url': "http://localhost:8080/v1",  # Default URL for Llamafile API (OpenAI-compatible format)
@@ -18,12 +18,6 @@ LLM_CONFIG = {
         'llama2:latest',
         'llamafile with llama-3-8b or llama-3-70b'  # Llamafile models also support tools
     ]
-}
-
-# Tool configuration
-TOOL_CONFIG = {
-    'enabled_tools': ['get_weather', 'get_date_time'],  # Tool names to enable
-    'custom_tools_dir': None,  # Directory with custom tool implementations
 }
 
 # Embedding model configuration
