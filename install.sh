@@ -170,7 +170,28 @@ sudo -u postgres psql -d funes -c "ALTER USER llm WITH LOGIN CREATEDB CREATEROLE
 # Create the vector extension
 sudo -u postgres psql -d funes -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
+# Set up database tables for vector-based tool selection
+print_section "Setting up vector-based tool selection"
+
+# Create the tools_embeddings table
+sudo -u postgres psql -d funes -c "
+CREATE TABLE IF NOT EXISTS tools_embeddings (
+    id SERIAL PRIMARY KEY,
+    tool_name VARCHAR(100) UNIQUE,
+    description TEXT,
+    embedding vector(384),
+    updated_at TIMESTAMP DEFAULT NOW()
+);" || true
+
+# Create index on tool embeddings for faster similarity search
+sudo -u postgres psql -d funes -c "
+CREATE INDEX IF NOT EXISTS idx_tools_embedding 
+ON tools_embeddings 
+USING ivfflat (embedding vector_l2_ops) 
+WITH (lists = 100);" || true
+
 print_success "PostgreSQL database setup completed with proper permissions"
+print_success "Vector-based tool selection tables created"
 
 # Set up Python environment
 print_section "Setting up Python environment"
@@ -280,6 +301,13 @@ echo -e "  2. Make sure Ollama is running:"
 echo -e "     ${YELLOW}ollama serve${RESET}"
 echo -e "  3. Run Funes using the launcher script:"
 echo -e "     ${YELLOW}./run_funes.sh${RESET}"
+
+echo -e "\n${BOLD}Features:${RESET}"
+echo -e "  • Dual Memory System (short-term and long-term)"
+echo -e "  • Retrieval-Augmented Generation (RAG)"
+echo -e "  • Vector-based Tool Selection"
+echo -e "  • Automatic tool embedding initialization"
+echo -e "  • Smart memory management (tool interactions not stored in long-term memory)"
 
 echo -e "\n${BOLD}${GREEN}Thank you for installing Funes!${RESET}"
 echo -e "${BOLD}${BLUE}=====================================================${RESET}"

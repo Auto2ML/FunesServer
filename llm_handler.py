@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import llama_cpp
 import tools  # Import the new tools package
-from llm_utilities import format_messages, extract_tool_information, should_use_tools, extract_tool_calls_from_response, enhance_tool_response
+from llm_utilities import format_messages, extract_tool_information, should_use_tools, extract_tool_calls_from_response, enhance_tool_response, should_use_tools_vector
 
 # Utility functions for backend implementations have been moved to llm_utilities.py
 
@@ -138,12 +138,31 @@ class OllamaBackend(LLMBackend):
         
         # Only add tools if provided AND the request seems appropriate for tool use
         if tools is not None:
-            # Use the shared function to determine if tools should be used
-            should_use_tool, suggested_tool = should_use_tools(messages, tools)
+            # Get the latest user message
+            latest_user_msg = ""
+            for msg in reversed(messages):
+                if msg["role"] == "user" and msg.get("content"):
+                    latest_user_msg = msg["content"]
+                    break
             
-            # Always include tools when in a tool conversation (if there's a previous tool response)
+            # Check if we're in a tool conversation (if there's a previous tool response)
             in_tool_conversation = any(msg.get("role") == "assistant" and "Tool response from" in msg.get("content", "") 
-                                   for msg in formatted_messages)
+                                    for msg in formatted_messages)
+            
+            # Try to get LLM handler reference to use vector-based tool selection
+            llm_handler = getattr(self, "_llm_handler", None)
+            if hasattr(llm_handler, "vector_tool_selection") and llm_handler.vector_tool_selection and latest_user_msg:
+                # Use vector-based tool selection
+                should_use_tool, suggested_tool = should_use_tools_vector(
+                    latest_user_msg, 
+                    llm_handler.embedding_model, 
+                    llm_handler.db_manager
+                )
+                print(f"[OllamaBackend] Vector-based tool selection result: use={should_use_tool}, tool={suggested_tool or 'None'}")
+            else:
+                # Fall back to keyword-based tool selection
+                should_use_tool, suggested_tool = should_use_tools(messages, tools)
+                print(f"[OllamaBackend] Keyword-based tool selection result: use={should_use_tool}, tool={suggested_tool or 'None'}")
             
             # Add tools to the request when appropriate
             if should_use_tool or in_tool_conversation:
@@ -261,15 +280,27 @@ class LlamaCppBackend(LLMBackend):
                         })
                 print(f"[LlamaCppBackend] Converted {len(llama_tools)} tools for llama.cpp")
             
-            # Use shared utility to determine if we should use function calling
-            should_use_function_calling, suggested_tool = should_use_tools(messages, tools)
-            
-            # Get the latest user message to check for specific tool mentions
+            # Get the latest user message
             latest_user_msg = ""
             for msg in reversed(formatted_messages):
                 if msg["role"] == "user" and msg.get("content"):
                     latest_user_msg = msg["content"].lower()
                     break
+            
+            # Try to get LLM handler reference to use vector-based tool selection
+            llm_handler = getattr(self, "_llm_handler", None)
+            if hasattr(llm_handler, "vector_tool_selection") and llm_handler.vector_tool_selection and latest_user_msg:
+                # Use vector-based tool selection
+                should_use_function_calling, suggested_tool = should_use_tools_vector(
+                    latest_user_msg,
+                    llm_handler.embedding_model,
+                    llm_handler.db_manager
+                )
+                print(f"[LlamaCppBackend] Vector-based tool selection result: use={should_use_function_calling}, tool={suggested_tool or 'None'}")
+            else:
+                # Fall back to keyword-based tool selection
+                should_use_function_calling, suggested_tool = should_use_tools(messages, tools)
+                print(f"[LlamaCppBackend] Keyword-based tool selection result: use={should_use_function_calling}, tool={suggested_tool or 'None'}")
             
             # Check if a specific tool is directly mentioned to force its use
             if should_use_function_calling and llama_tools:
@@ -288,33 +319,7 @@ class LlamaCppBackend(LLMBackend):
                             print(f"[LlamaCppBackend] Forcing use of tool: {tool_name}")
                             break
                 
-                # If time/date is mentioned, force the datetime tool
-                if any(keyword in latest_user_msg for keyword in ["time", "date", "today", "now", "current time", "current date"]):
-                    for tool in tools:
-                        if "function" in tool and tool["function"].get("name") == "get_date_time":
-                            tool_choice = {
-                                "type": "function",
-                                "function": {
-                                    "name": "get_date_time"
-                                }
-                            }
-                            print("[LlamaCppBackend] Forcing use of get_date_time tool")
-                            break
-                            
-                # If weather is mentioned, force the weather tool
-                if any(keyword in latest_user_msg for keyword in ["weather", "temperature", "forecast", "rain", "sunny"]):
-                    for tool in tools:
-                        if "function" in tool and tool["function"].get("name") == "get_weather":
-                            tool_choice = {
-                                "type": "function",
-                                "function": {
-                                    "name": "get_weather"
-                                }
-                            }
-                            print("[LlamaCppBackend] Forcing use of get_weather tool")
-                            break
-                
-                # If a specific tool was suggested by the shared function, use it
+                # If a specific tool was suggested, use it
                 if suggested_tool:
                     for tool in tools:
                         if "function" in tool and tool["function"].get("name") == suggested_tool:
@@ -574,6 +579,22 @@ class LLMHandler:
         # Print model information
         print(f"Using model: {llm_model_name} with {backend_type} backend")
         print(f"Tools are always enabled in Funes")
+        
+        # Initialize database connection for tool embeddings
+        # We don't need to check for errors here as any critical issues will be caught during creation
+        from database import DatabaseManager
+        from config import DB_CONFIG
+        try:
+            self.db_manager = DatabaseManager(DB_CONFIG)
+            # Initialize tool embeddings
+            initialize_tool_embeddings(self.tools, self.embedding_model, self.db_manager)
+            self.vector_tool_selection = True
+            print("Vector-based tool selection enabled")
+        except Exception as e:
+            print(f"Error initializing vector tool selection: {str(e)}")
+            print("Falling back to keyword-based tool selection")
+            self.vector_tool_selection = False
+            self.db_manager = None
     
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for a list of texts"""

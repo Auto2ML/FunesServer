@@ -143,14 +143,37 @@ class DualMemoryManager:
         try:
             print("Starting process_chat with message:", user_message[:30] + "..." if len(user_message) > 30 else user_message)
             
-            # Get relevant long-term memories
-            print("Retrieving relevant memories...")
+            # Check if this is a tool-related query using our vector embedding system
+            is_tool_query = False
+            suggested_tool = None
+            
+            # Try to use vector-based tool selection if available
             try:
-                long_term_memories = self.retrieve_relevant_memories(user_message)
-                print(f"Retrieved {len(long_term_memories)} memories")
+                if hasattr(self.llm_handler, "vector_tool_selection") and self.llm_handler.vector_tool_selection:
+                    from llm_utilities import should_use_tools_vector
+                    is_tool_query, suggested_tool = should_use_tools_vector(
+                        user_message,
+                        self.llm_handler.embedding_model,
+                        self.llm_handler.db_manager
+                    )
+                    print(f"Vector-based tool selection result: is_tool_query={is_tool_query}, tool={suggested_tool or 'None'}")
+            except Exception as e:
+                print(f"Error in vector-based tool selection: {str(e)}")
+                # Fall back to keyword-based detection in case of error
+                is_tool_query = False
+            
+            # Get relevant long-term memories (only if this isn't a tool query)
+            print("Retrieving relevant memories...")
+            long_term_memories = []
+            try:
+                if not is_tool_query:
+                    # Only retrieve memories if this is NOT a tool query
+                    long_term_memories = self.retrieve_relevant_memories(user_message)
+                    print(f"Retrieved {len(long_term_memories)} memories")
+                else:
+                    print("Skipping memory retrieval for tool query")
             except Exception as e:
                 print(f"Error retrieving memories: {str(e)}")
-                long_term_memories = []
             
             # Convert short-term memory to the format expected by LLMHandler
             print("Building conversation history...")
@@ -188,6 +211,10 @@ class DualMemoryManager:
                 for memory in long_term_memories:
                     additional_context += f"- {memory[0]}\n"
             
+            # Add the user message to short-term memory
+            print("Adding user message to short-term memory...")
+            self._add_to_short_term('user', user_message)
+            
             # Get LLM response using the LLM handler
             print("Generating LLM response...")
             try:
@@ -216,6 +243,10 @@ class DualMemoryManager:
                     display_response += "\n[Tool usage detected: Processing tool request]"
                 
                 self.chat_history.append((user_message, display_response))
+                
+                # Don't store tool-related interactions in long-term memory
+                print("Skipping memory storage for tool interaction")
+                
                 return display_response
             else:
                 print("Response is a simple text response")
@@ -223,53 +254,40 @@ class DualMemoryManager:
                 self._add_to_short_term('assistant', llm_response)
                 self.chat_history.append((user_message, llm_response))
                 
-                # Store user message in long-term memory
-                print("Storing user message memory...")
-                try:
-                    self.store_memory(user_message)
-                    print("User message stored successfully")
-                except Exception as e:
-                    print(f"Error storing user message: {str(e)}")
-                
-                # Store assistant response in long-term memory
-                # For regular text responses, we always store them
-                print("Storing assistant response memory...")
-                try:
-                    # Check if this is a tool response by looking for common patterns
-                    is_tool_response = False
-                    tool_name = None
+                # Only store in long-term memory if this is NOT a tool interaction
+                if not is_tool_query:
+                    # Store user message in long-term memory
+                    print("Storing user message memory...")
+                    try:
+                        self.store_memory(user_message)
+                        print("User message stored successfully")
+                    except Exception as e:
+                        print(f"Error storing user message: {str(e)}")
                     
-                    # Look for patterns indicating this is a tool response
-                    tool_patterns = [
-                        r"Tool response from (\w+):",
-                        r"I used the (\w+) tool",
-                        r"According to the (\w+) tool",
-                        r"Based on the (\w+) tool",
-                        r"The (\w+) tool returned"
-                    ]
-                    
-                    for pattern in tool_patterns:
-                        match = re.search(pattern, llm_response)
-                        if match:
-                            is_tool_response = True
-                            tool_name = match.group(1)
-                            print(f"Detected tool response from {tool_name}")
-                            break
-                    
-                    # If this is a tool response, check if we should store it
-                    if is_tool_response and tool_name:
-                        should_store = self.should_store_tool_response(tool_name)
-                        if should_store:
-                            print(f"Tool {tool_name} allows storing responses, storing in memory")
+                    # Store assistant response in long-term memory (if not a tool response)
+                    print("Storing assistant response memory...")
+                    try:
+                        # Check if this looks like a tool response by analyzing content
+                        tool_response_patterns = [
+                            r"Tool response from (\w+):",
+                            r"I used the (\w+) tool",
+                            r"According to the (\w+) tool",
+                            r"Based on the (\w+) tool",
+                            r"The (\w+) tool returned"
+                        ]
+                        
+                        looks_like_tool_response = any(re.search(pattern, llm_response) 
+                                                       for pattern in tool_response_patterns)
+                        
+                        if not looks_like_tool_response:
                             self.store_memory(llm_response)
+                            print("Memory stored successfully")
                         else:
-                            print(f"Tool {tool_name} does not allow storing responses, skipping memory storage")
-                    else:
-                        # It's a regular assistant response, store it
-                        self.store_memory(llm_response)
-                        print("Memory stored successfully")
-                except Exception as e:
-                    print(f"Error storing memory: {str(e)}")
+                            print("Response looks like tool output, skipping memory storage")
+                    except Exception as e:
+                        print(f"Error storing memory: {str(e)}")
+                else:
+                    print("Skipping memory storage for tool query response")
                 
                 return llm_response
                 

@@ -43,11 +43,32 @@ class DatabaseManager:
                 );
             """)
             
+            # Create tools_embeddings table for tool information and embeddings
+            print("[DatabaseManager] Creating tools_embeddings table if needed")
+            self.cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tools_embeddings (
+                    id SERIAL PRIMARY KEY,
+                    tool_name VARCHAR(100) UNIQUE,
+                    description TEXT,
+                    embedding vector(384),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
+            """)
+            
             # Create index on embedding for faster similarity search
             print("[DatabaseManager] Creating embedding index if needed")
             self.cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_memories_embedding 
                 ON memories 
+                USING ivfflat (embedding vector_l2_ops) 
+                WITH (lists = 100);
+            """)
+            
+            # Create index on tool embeddings for faster similarity search
+            print("[DatabaseManager] Creating tool embedding index if needed")
+            self.cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tools_embedding 
+                ON tools_embeddings 
                 USING ivfflat (embedding vector_l2_ops) 
                 WITH (lists = 100);
             """)
@@ -154,6 +175,82 @@ class DatabaseManager:
             print(f"[DatabaseManager] Error clearing memories: {str(e)}")
             print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
             self.conn.rollback()  # Rollback in case of error
+            raise
+            
+    def store_tool_embedding(self, tool_name, description, embedding):
+        """Store tool information and embedding in the database"""
+        try:
+            print(f"[DatabaseManager] Storing embedding for tool: {tool_name}")
+            # Use UPSERT (INSERT ... ON CONFLICT UPDATE) pattern for tools
+            self.cursor.execute(
+                """INSERT INTO tools_embeddings 
+                   (tool_name, description, embedding, updated_at) 
+                   VALUES (%s, %s, %s::vector, NOW())
+                   ON CONFLICT (tool_name) 
+                   DO UPDATE SET 
+                       description = EXCLUDED.description,
+                       embedding = EXCLUDED.embedding,
+                       updated_at = NOW();""",
+                (tool_name, description, embedding)
+            )
+            self.conn.commit()
+            print(f"[DatabaseManager] Tool embedding stored successfully for: {tool_name}")
+        except Exception as e:
+            import traceback
+            print(f"[DatabaseManager] Error storing tool embedding: {str(e)}")
+            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            self.conn.rollback()
+            raise
+            
+    def find_similar_tools(self, query_embedding, similarity_threshold=0.75, top_k=3):
+        """Find tools similar to the query embedding"""
+        try:
+            print(f"[DatabaseManager] Finding similar tools with threshold {similarity_threshold}")
+            # Lower distance = higher similarity, so we invert the comparison
+            # Use a combination of similarity threshold and top_k
+            self.cursor.execute(
+                """SELECT tool_name, description, 1 - (embedding <-> %s::vector) AS similarity
+                   FROM tools_embeddings
+                   WHERE 1 - (embedding <-> %s::vector) > %s
+                   ORDER BY similarity DESC
+                   LIMIT %s;""",
+                (query_embedding, query_embedding, similarity_threshold, top_k)
+            )
+            results = self.cursor.fetchall()
+            print(f"[DatabaseManager] Found {len(results)} similar tools")
+            return results  # Returns [(tool_name, description, similarity), ...]
+        except Exception as e:
+            import traceback
+            print(f"[DatabaseManager] Error finding similar tools: {str(e)}")
+            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            return []  # Return empty list in case of error
+            
+    def get_all_tools(self):
+        """Retrieve all stored tools"""
+        try:
+            print("[DatabaseManager] Retrieving all tools")
+            self.cursor.execute("SELECT tool_name, description FROM tools_embeddings;")
+            results = self.cursor.fetchall()
+            print(f"[DatabaseManager] Found {len(results)} tools")
+            return results
+        except Exception as e:
+            import traceback
+            print(f"[DatabaseManager] Error retrieving all tools: {str(e)}")
+            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            return []  # Return empty list in case of error
+            
+    def delete_tool(self, tool_name):
+        """Remove a tool from the database"""
+        try:
+            print(f"[DatabaseManager] Deleting tool: {tool_name}")
+            self.cursor.execute("DELETE FROM tools_embeddings WHERE tool_name = %s;", (tool_name,))
+            self.conn.commit()
+            print(f"[DatabaseManager] Tool {tool_name} deleted successfully")
+        except Exception as e:
+            import traceback
+            print(f"[DatabaseManager] Error deleting tool: {str(e)}")
+            print(f"[DatabaseManager] Traceback: {traceback.format_exc()}")
+            self.conn.rollback()
             raise
             
     def __del__(self):
