@@ -38,6 +38,16 @@ def get_tool(name: str) -> Optional[GenericTool]:
     """
     return _registered_tools.get(name)
 
+def get_available_tools() -> List[Dict[str, Any]]:
+    """
+    Get a list of all registered tools in a format suitable for LLM function calling.
+    This function is an alias for list_tools() for compatibility.
+    
+    Returns:
+        List of tool definitions in OpenAI function calling format
+    """
+    return list_tools()
+
 def list_tools() -> List[Dict[str, Any]]:
     """
     List all registered tools in a format suitable for LLM function calling.

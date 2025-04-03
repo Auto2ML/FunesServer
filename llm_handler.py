@@ -86,22 +86,23 @@ class LLMHandler:
                 backend = OllamaBackend(model_name)
                 backend._llm_handler = self  # Set reference back to this handler
                 return backend
-                
-            elif backend_name.lower() == 'llamacpp':
-                model_path = self.config.get('model_path', 'models/llama.gguf')
-                context_size = self.config.get('context_size', 4096)
-                temperature = self.config.get('temperature', 0.7)
-                max_tokens = self.config.get('max_tokens', 1024)
-                backend = LlamaCppBackend(model_path, context_size, temperature, max_tokens)
-                backend._llm_handler = self  # Set reference back to this handler
-                return backend
-                
-            elif backend_name.lower() == 'llamafile':
-                model_name = self.config.get('model_name', 'LLaMA_CPP')
-                api_url = self.config.get('api_url', 'http://localhost:8080/v1')
-                backend = LlamafileBackend(model_name, api_url)
-                backend._llm_handler = self  # Set reference back to this handler
-                return backend
+            
+            # Commenting out all non-Ollama backends
+            # elif backend_name.lower() == 'llamacpp':
+            #     model_path = self.config.get('model_path', 'models/llama.gguf')
+            #     context_size = self.config.get('context_size', 4096)
+            #     temperature = self.config.get('temperature', 0.7)
+            #     max_tokens = self.config.get('max_tokens', 1024)
+            #     backend = LlamaCppBackend(model_path, context_size, temperature, max_tokens)
+            #     backend._llm_handler = self  # Set reference back to this handler
+            #     return backend
+            #     
+            # elif backend_name.lower() == 'llamafile':
+            #     model_name = self.config.get('model_name', 'LLaMA_CPP')
+            #     api_url = self.config.get('api_url', 'http://localhost:8080/v1')
+            #     backend = LlamafileBackend(model_name, api_url)
+            #     backend._llm_handler = self  # Set reference back to this handler
+            #     return backend
                 
             else:
                 self.logger.error(f"[LLMHandler] Unknown backend type: {backend_name}")
@@ -109,10 +110,6 @@ class LLMHandler:
                 backend = OllamaBackend(self.config.get('model_name', 'llama3'))
                 backend._llm_handler = self  # Set reference back to this handler
                 return backend
-                
-        except Exception as e:
-            self.logger.error(f"[LLMHandler] Error initializing backend: {str(e)}")
-            raise
     
     def set_embedding_model(self, model):
         """Set the embedding model reference"""
@@ -211,6 +208,8 @@ class LLMBackend(abc.ABC):
         """Check if this backend/model supports tool use"""
         pass
 
+# Commented out non-Ollama backend implementations
+"""
 class LlamafileBackend(LLMBackend):
     """Llamafile backend implementation using OpenAI-compatible API"""
     
@@ -290,6 +289,7 @@ class LlamafileBackend(LLMBackend):
                 'content': f"Error generating response: {str(e)}",
                 'tool_calls': []
             }
+"""
 
 class OllamaBackend(LLMBackend):
     """Ollama backend implementation"""
@@ -316,72 +316,125 @@ class OllamaBackend(LLMBackend):
             elif msg["role"] == "tool":
                 # For Ollama, convert tool responses to assistant messages
                 formatted_messages.append({
-                    "role": "assistant",
+                    "role": "assistant", 
                     "content": f"Tool response from {msg.get('name', 'unknown')}: {msg['content']}"
                 })
         
-        # Prepare the request parameters
+        # Prepare the base request parameters
         params = {"model": self.model_name, "messages": formatted_messages, "stream": False}
         
-        # Only add tools if provided AND the request seems appropriate for tool use
-        if tools is not None:
-            # Get the latest user message
+        # Only continue with tool processing if tools are provided
+        if tools is not None and len(tools) > 0:
+            # Get the latest user message for tool selection
             latest_user_msg = ""
             for msg in reversed(messages):
                 if msg["role"] == "user" and msg.get("content"):
                     latest_user_msg = msg["content"]
                     break
             
-            # Check if we're in a tool conversation (if there's a previous tool response)
-            in_tool_conversation = any(msg.get("role") == "assistant" and "Tool response from" in msg.get("content", "") 
-                                    for msg in formatted_messages)
-            
-            # Try to get LLM handler reference to use vector-based tool selection
-            llm_handler = getattr(self, "_llm_handler", None)
-            if hasattr(llm_handler, "vector_tool_selection") and llm_handler.vector_tool_selection and latest_user_msg:
-                # Use vector-based tool selection
-                should_use_tool, suggested_tool = should_use_tools_vector(
-                    latest_user_msg, 
-                    llm_handler.embedding_model, 
-                    llm_handler.db_manager
+            if not latest_user_msg:
+                self.logger.info("No user message found, skipping tool selection")
+            else:
+                # Check if we're in a tool conversation (if there's a previous tool response)
+                in_tool_conversation = any(
+                    msg.get("role") == "assistant" and "Tool response from" in msg.get("content", "")
+                    for msg in formatted_messages
                 )
-                self.logger.info(f"Vector-based tool selection result: use={should_use_tool}, tool={suggested_tool or 'None'}")
-            else:
-                # Fall back to keyword-based tool selection
-                should_use_tool, suggested_tool = should_use_tools(messages, tools)
-                self.logger.info(f"Keyword-based tool selection result: use={should_use_tool}, tool={suggested_tool or 'None'}")
-            
-            # Add tools to the request when appropriate
-            if should_use_tool or in_tool_conversation:
-                params["tools"] = tools
-                self.logger.info("Including tools in request based on content analysis")
-                if suggested_tool:
-                    self.logger.info(f"Suggested tool: {suggested_tool}")
-            else:
-                self.logger.info("Omitting tools from request - query appears to be general knowledge")
+                
+                # Get reference to the LLM handler for vector tool selection
+                llm_handler = getattr(self, "_llm_handler", None)
+                should_use_tool = False
+                suggested_tool = None
+                
+                # Only use vector-based tool selection if we have the necessary components
+                if (llm_handler and hasattr(llm_handler, "embedding_model") and 
+                    llm_handler.embedding_model and llm_handler.db_manager):
+                    try:
+                        # Use vector-based tool selection
+                        should_use_tool, suggested_tool = should_use_tools_vector(
+                            latest_user_msg, 
+                            llm_handler.embedding_model, 
+                            llm_handler.db_manager,
+                            similarity_threshold=0.70  # Adjust threshold to be more permissive
+                        )
+                        self.logger.info(f"Vector-based tool selection result: use={should_use_tool}, tool={suggested_tool or 'None'}")
+                        
+                        # Log the input that led to this decision for debugging
+                        self.logger.debug(f"Tool decision based on user message: '{latest_user_msg[:50]}...'")
+                    except Exception as e:
+                        self.logger.error(f"Error in vector-based tool selection: {str(e)}")
+                        should_use_tool = False
+                
+                # Add tools to the request when appropriate
+                if should_use_tool or in_tool_conversation:
+                    params["tools"] = tools
+                    self.logger.info("Including tools in request")
+                    
+                    # If we have a suggested tool, log more details about it
+                    if suggested_tool:
+                        self.logger.info(f"Selected tool: {suggested_tool}")
+                        # Find the tool definition to log its parameters
+                        for tool in tools:
+                            if "function" in tool and tool["function"].get("name") == suggested_tool:
+                                params_schema = tool["function"].get("parameters", {})
+                                self.logger.debug(f"Tool parameters schema: {json.dumps(params_schema)}")
+                                break
         
         # Send to Ollama API
         try:
             # Use the Ollama Python client to make the API call
+            self.logger.info(f"Sending request to Ollama with model: {self.model_name}")
+            if "tools" in params:
+                self.logger.info(f"Request includes {len(params['tools'])} tools")
+            
             response = ollama.chat(**params)
             content = response['message']['content']
             
             # Check for tool calls in the response
             tool_calls = []
             
-            # For newer Ollama versions that support tools natively
+            # Extract tool calls from Ollama response
             if 'tool_calls' in response['message']:
-                tool_calls = response['message']['tool_calls']
+                raw_tool_calls = response['message']['tool_calls']
+                self.logger.info(f"Response contains {len(raw_tool_calls)} tool calls")
                 
-                # Ensure the tool_calls are in the correct format
-                for tool_call in tool_calls:
+                # Process each tool call and ensure proper format
+                for tool_call in raw_tool_calls:
+                    self.logger.debug(f"Processing tool call: {json.dumps(tool_call)}")
+                    
                     # Make sure each tool call has a function field with name and arguments
                     if 'function' not in tool_call and 'name' in tool_call:
                         # Convert from flat format to nested format
-                        tool_call['function'] = {
-                            'name': tool_call.pop('name'),
-                            'arguments': tool_call.pop('arguments', {})
+                        tool_call_id = tool_call.get('id', f"call_{len(tool_calls)}")
+                        tool_name = tool_call.pop('name')
+                        tool_args = tool_call.pop('arguments', {})
+                        
+                        # Parse string arguments to JSON if needed
+                        if isinstance(tool_args, str):
+                            try:
+                                tool_args = json.loads(tool_args)
+                            except json.JSONDecodeError:
+                                self.logger.warning(f"Failed to parse tool arguments as JSON: {tool_args}")
+                        
+                        formatted_tool_call = {
+                            'id': tool_call_id,
+                            'function': {
+                                'name': tool_name,
+                                'arguments': tool_args
+                            }
                         }
+                        self.logger.debug(f"Formatted tool call: {json.dumps(formatted_tool_call)}")
+                        tool_calls.append(formatted_tool_call)
+                    else:
+                        # Already in the correct format
+                        tool_calls.append(tool_call)
+                
+                # Log the extracted parameters for verification
+                for idx, tool_call in enumerate(tool_calls):
+                    if 'function' in tool_call:
+                        func_name = tool_call['function'].get('name', 'unknown')
+                        func_args = tool_call['function'].get('arguments', {})
+                        self.logger.info(f"Tool call {idx+1}: {func_name} with arguments: {json.dumps(func_args)}")
             
             return {
                 'content': content,
@@ -395,6 +448,7 @@ class OllamaBackend(LLMBackend):
                 'tool_calls': []
             }
 
+"""
 class LlamaCppBackend(LLMBackend):
     """llama.cpp backend implementation"""
     
@@ -605,3 +659,4 @@ class LlamaCppBackend(LLMBackend):
                 'content': f"Error generating response: {str(e)}",
                 'tool_calls': []
             }
+"""
