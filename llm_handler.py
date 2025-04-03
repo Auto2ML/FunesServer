@@ -211,7 +211,7 @@ class LLMBackend(abc.ABC):
 # Commented out non-Ollama backend implementations
 """
 class LlamafileBackend(LLMBackend):
-    """Llamafile backend implementation using OpenAI-compatible API"""
+    # Llamafile backend implementation using OpenAI-compatible API
     
     def __init__(self, model_name: str = None, api_url: str = None):
         super().__init__()
@@ -220,7 +220,7 @@ class LlamafileBackend(LLMBackend):
         self.model_name = model_name or "LLaMA_CPP"  # Default model name for Llamafile
         
     def supports_tool_use(self) -> bool:
-        """Most Llamafile models support tool use via the OpenAI function calling API"""
+        # Most Llamafile models support tool use via the OpenAI function calling API
         return True
     
     def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
@@ -450,7 +450,7 @@ class OllamaBackend(LLMBackend):
 
 """
 class LlamaCppBackend(LLMBackend):
-    """llama.cpp backend implementation"""
+    #llama.cpp backend implementation
     
     def __init__(self, model_path: str, context_size: int = 4096, 
                  temperature: float = 0.7, max_tokens: int = 1024):
@@ -488,7 +488,7 @@ class LlamaCppBackend(LLMBackend):
         return self._llm_instances[chat_format]
         
     def supports_tool_use(self) -> bool:
-        """All models are assumed to support tool use"""
+        # All models are assumed to support tool use
         return True
     
     def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
