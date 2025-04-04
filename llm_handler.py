@@ -416,7 +416,6 @@ class OllamaBackend(LLMBackend):
                 'content': content,
                 'tool_calls': tool_calls
             }
-            
         except Exception as e:
             self.logger.error(f"Error generating response: {str(e)}", exc_info=True)
             return {
