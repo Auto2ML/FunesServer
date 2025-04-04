@@ -172,11 +172,26 @@ class DualMemoryManager:
         self.short_term_memory = deque(maxlen=short_term_capacity)
         self.short_term_ttl = timedelta(minutes=short_term_ttl_minutes)
     
-    def _add_to_short_term(self, role, content):
-        """Add a message to short-term memory with timestamp"""
+    def _add_to_short_term(self, role, content, **kwargs):
+        """Add a message to short-term memory with timestamp and optional additional fields"""
+        message = {
+            'role': role,
+            'content': content,
+            'timestamp': datetime.now()
+        }
+        
+        # Add any additional fields (like tool_call_id, name, etc.)
+        for key, value in kwargs.items():
+            message[key] = value
+            
+        self.short_term_memory.append(message)
+    
+    def _add_to_short_term_with_tool_calls(self, role, content, tool_calls):
+        """Add a message with tool calls to short-term memory"""
         self.short_term_memory.append({
             'role': role,
             'content': content,
+            'tool_calls': tool_calls,
             'timestamp': datetime.now()
         })
     
@@ -262,18 +277,20 @@ class DualMemoryManager:
         try:
             logger.info("Starting process_chat with message: %s", user_message[:30] + "..." if len(user_message) > 30 else user_message)
             
-            # Check if this is a tool-related query using our vector embedding system
+            # Check if this is a tool-related query using vector embedding system
             is_tool_query = False
             suggested_tool = None
             
             # Try to use vector-based tool selection if available
             try:
-                if hasattr(self.llm_handler, "vector_tool_selection") and self.llm_handler.vector_tool_selection:
-                    from llm_utilities import should_use_tools_vector
+                # Use the centralized function from llm_utilities
+                from llm_utilities import should_use_tools_vector
+                if self.db_manager:
                     is_tool_query, suggested_tool = should_use_tools_vector(
                         user_message,
-                        self.embedding_manager.embedding_model,
-                        self.db_manager
+                        None,  # We'll use the existing get_embedding function
+                        self.db_manager,
+                        similarity_threshold=0.75
                     )
                     logger.info(f"Vector-based tool selection result: is_tool_query={is_tool_query}, tool={suggested_tool or 'None'}")
             except Exception as e:
@@ -290,7 +307,7 @@ class DualMemoryManager:
                     long_term_memories = self.retrieve_relevant_memories(user_message)
                     logger.info(f"Retrieved {len(long_term_memories)} memories")
                 else:
-                    logger.info("Skipping memory retrieval for tool query")
+                    logger.info("Skipping memory retrieval for tool query - using tools instead")
             except Exception as e:
                 logger.error(f"Error retrieving memories: {str(e)}")
             
@@ -334,13 +351,37 @@ class DualMemoryManager:
             logger.info("Adding user message to short-term memory...")
             self._add_to_short_term('user', user_message)
             
-            # Get LLM response using the LLM handler
+            # Pass tool information to the LLM handler if a tool was selected
+            specific_tool = None
+            if is_tool_query and suggested_tool:
+                # Get actual tool details to pass to LLM handler
+                tool_info = tools.get_tool(suggested_tool)
+                if tool_info:
+                    specific_tool = suggested_tool
+                    tool_note = f"Selected tool: {suggested_tool} - {tool_info.description}"
+                    logger.info(tool_note)
+                    
+                    # We might add this to the system message
+                    if additional_context:
+                        additional_context += f"\n{tool_note}"
+                    else:
+                        additional_context = tool_note
+            
+            # Get LLM response using the LLM handler - pass the specific_tool if we have one
             logger.info("Generating LLM response...")
             try:
+                # Make sure the LLM handler has access to the database manager for vector tool selection
+                if not hasattr(self.llm_handler, 'db_manager') or self.llm_handler.db_manager is None:
+                    self.llm_handler.db_manager = self.db_manager
+                    logger.info("Set db_manager reference in LLM handler")
+                
+                # Pass specific_tool to generate_response if we identified one
                 llm_response = self.llm_handler.generate_response(
                     user_input=user_message,
                     conversation_history=conversation_history,
-                    additional_context=additional_context if additional_context else None
+                    additional_context=additional_context if additional_context else None,
+                    include_tools=True,  # Always include tools, the LLM handler will filter as needed
+                    specific_tool=specific_tool  # Pass the identified tool if any
                 )
                 logger.info(f"Received response of type: {type(llm_response)}")
             except Exception as e:
@@ -350,16 +391,43 @@ class DualMemoryManager:
             
             # Handle response based on whether it's a simple string or a dict with tool calls
             logger.info("Processing LLM response...")
-            if isinstance(llm_response, dict) and 'tool_calls' in llm_response:
+            if isinstance(llm_response, dict) and 'tool_calls' in llm_response and llm_response['tool_calls']:
                 logger.info(f"Response contains tool calls: {llm_response.get('tool_calls')}")
                 # Add the assistant message with tool calls
                 self._add_to_short_term_with_tool_calls('assistant', llm_response['content'], llm_response['tool_calls'])
                 
-                # For UI display, we'll just show the content with a note about tool usage
-                display_response = llm_response['content']
-                if llm_response['tool_calls']:
-                    display_response += "\n[Tool usage detected: Processing tool request]"
+                # Process each tool call
+                tool_results = []
+                for tool_call in llm_response['tool_calls']:
+                    try:
+                        # Execute the tool
+                        tool_result = tools.execute_tool_call(tool_call)
+                        
+                        # Get the tool name for more context
+                        tool_name = tool_call['function']['name'] if 'function' in tool_call else "unknown_tool"
+                        
+                        # Enhance the raw tool response with natural language
+                        from llm_utilities import enhance_tool_response
+                        enhanced_response = enhance_tool_response(user_message, tool_name, tool_result)
+                        
+                        # Store the tool result in short-term memory
+                        self._add_to_short_term('tool', enhanced_response, tool_call_id=tool_call.get('id', '0'), name=tool_name)
+                        
+                        # Add to results list for display
+                        tool_results.append(enhanced_response)
+                        logger.info(f"Tool '{tool_name}' executed successfully")
+                    except Exception as e:
+                        error_msg = f"Error executing tool: {str(e)}"
+                        logger.error(error_msg)
+                        tool_results.append(error_msg)
                 
+                # Create a combined display response
+                if len(tool_results) == 1:
+                    display_response = tool_results[0]
+                else:
+                    display_response = "Multiple tool results:\n" + "\n---\n".join(tool_results)
+                
+                # Add to chat history for UI
                 self.chat_history.append((user_message, display_response))
                 
                 # Don't store tool-related interactions in long-term memory
@@ -368,9 +436,10 @@ class DualMemoryManager:
                 return display_response
             else:
                 logger.info("Response is a simple text response")
-                # Just a regular text response
-                self._add_to_short_term('assistant', llm_response)
-                self.chat_history.append((user_message, llm_response))
+                # Just a regular text response (or the LLM didn't make a tool call even though it should have)
+                response_content = llm_response['content'] if isinstance(llm_response, dict) else llm_response
+                self._add_to_short_term('assistant', response_content)
+                self.chat_history.append((user_message, response_content))
                 
                 # Only store in long-term memory if this is NOT a tool interaction
                 if not is_tool_query:
@@ -394,11 +463,11 @@ class DualMemoryManager:
                             r"The (\w+) tool returned"
                         ]
                         
-                        looks_like_tool_response = any(re.search(pattern, llm_response) 
+                        looks_like_tool_response = any(re.search(pattern, response_content) 
                                                        for pattern in tool_response_patterns)
                         
                         if not looks_like_tool_response:
-                            self.store_memory(llm_response)
+                            self.store_memory(response_content)
                             logger.info("Memory stored successfully")
                         else:
                             logger.info("Response looks like tool output, skipping memory storage")
@@ -407,18 +476,9 @@ class DualMemoryManager:
                 else:
                     logger.info("Skipping memory storage for tool query response")
                 
-                return llm_response
+                return response_content
                 
         except Exception as e:
             error_msg = f"Error processing request: {str(e)}\n{traceback.format_exc()}"
             logger.error(error_msg)  # For logging
             return error_msg
-    
-    def _add_to_short_term_with_tool_calls(self, role, content, tool_calls):
-        """Add a message with tool calls to short-term memory"""
-        self.short_term_memory.append({
-            'role': role,
-            'content': content,
-            'tool_calls': tool_calls,
-            'timestamp': datetime.now()
-        })

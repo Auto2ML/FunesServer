@@ -106,7 +106,8 @@ class LLMHandler:
     
     def generate_response(self, user_input: str, conversation_history: List[Dict[str, Any]], 
                           additional_context: str = None,
-                          include_tools: bool = True) -> Union[str, Dict[str, Any]]:
+                          include_tools: bool = True,
+                          specific_tool: str = None) -> Union[str, Dict[str, Any]]:
         """Generate a response using the configured LLM backend"""
         try:
             # Create a new copy of the conversation history
@@ -120,6 +121,10 @@ class LLMHandler:
                     # If additional context is provided, append it to existing system message
                     if additional_context:
                         msg['content'] += f"\n\nAdditional context: {additional_context}"
+                    
+                    # If a specific tool is requested, explicitly instruct to use it
+                    if specific_tool:
+                        msg['content'] += f"\n\nIMPORTANT: For this query, you MUST use the '{specific_tool}' tool."
                     break
             
             # Add system message with system prompt from config if none exists
@@ -127,6 +132,10 @@ class LLMHandler:
                 system_content = self.config.get('system_prompt', "You are a helpful assistant.")
                 if additional_context:
                     system_content += f"\n\nAdditional context: {additional_context}"
+                
+                # If a specific tool is requested, explicitly instruct to use it
+                if specific_tool:
+                    system_content += f"\n\nIMPORTANT: For this query, you MUST use the '{specific_tool}' tool."
                 
                 messages.insert(0, {
                     'role': 'system',
@@ -144,14 +153,28 @@ class LLMHandler:
             available_tools = None
             if include_tools:
                 try:
-                    available_tools = tools.get_available_tools() 
-                    self.logger.info(f"[LLMHandler] Including {len(available_tools)} tools in request")
+                    if specific_tool:
+                        # Only get the specific tool that was requested
+                        all_tools = tools.get_available_tools()
+                        available_tools = []
+                        for tool in all_tools:
+                            if 'function' in tool and tool['function'].get('name') == specific_tool:
+                                available_tools = [tool]
+                                self.logger.info(f"[LLMHandler] Including only the specified tool: {specific_tool}")
+                                break
+                        if not available_tools:
+                            self.logger.warning(f"[LLMHandler] Specified tool {specific_tool} not found in available tools")
+                            available_tools = all_tools
+                    else:
+                        # Get all tools
+                        available_tools = tools.get_available_tools()
+                    self.logger.info(f"[LLMHandler] Retrieved {len(available_tools)} available tools")
                 except Exception as e:
                     self.logger.warning(f"[LLMHandler] Error getting tools: {str(e)}")
             
             # Generate the response
             self.logger.info("[LLMHandler] Generating response...")
-            response = self.backend.generate(messages, available_tools)
+            response = self.backend.generate(messages, available_tools, specific_tool)
             
             # Check if this is a tool call that needs processing
             if response.get('tool_calls'):
@@ -281,7 +304,7 @@ class OllamaBackend(LLMBackend):
         """All models are assumed to support tool use"""
         return True
     
-    def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    def generate(self, messages: List[Dict[str, str]], tools: Optional[List[Dict[str, Any]]] = None, specific_tool: Optional[str] = None) -> Dict[str, Any]:
         # Format messages using the shared utility function
         formatted_messages = []
         
@@ -318,43 +341,97 @@ class OllamaBackend(LLMBackend):
                     for msg in formatted_messages
                 )
                 
-                # Get reference to the LLM handler for vector tool selection
-                llm_handler = getattr(self, "_llm_handler", None)
+                # If a specific tool is requested, override any other tool selection logic
                 should_use_tool = False
                 suggested_tool = None
                 
-                # Only use vector-based tool selection if we have the necessary components
-                if llm_handler and hasattr(llm_handler, "db_manager") and llm_handler.db_manager:
-                    try:
-                        # Use vector-based tool selection with the embedding from memory_manager
-                        should_use_tool, suggested_tool = should_use_tools_vector(
-                            latest_user_msg, 
-                            None,  # We'll use get_embedding directly
-                            llm_handler.db_manager,
-                            similarity_threshold=0.70  # Adjust threshold to be more permissive
-                        )
-                        self.logger.info(f"Vector-based tool selection result: use={should_use_tool}, tool={suggested_tool or 'None'}")
-                        
-                        # Log the input that led to this decision for debugging
-                        self.logger.debug(f"Tool decision based on user message: '{latest_user_msg[:50]}...'")
-                    except Exception as e:
-                        self.logger.error(f"Error in vector-based tool selection: {str(e)}")
-                        should_use_tool = False
+                if specific_tool:
+                    should_use_tool = True
+                    suggested_tool = specific_tool
+                    self.logger.info(f"Using specifically requested tool: {specific_tool}")
+                # Otherwise, perform normal tool selection if needed
+                elif not in_tool_conversation:
+                    # Get reference to the LLM handler for vector tool selection
+                    llm_handler = getattr(self, "_llm_handler", None)
+                    
+                    # Only use vector-based tool selection if we have the necessary components
+                    if llm_handler and hasattr(llm_handler, "db_manager") and llm_handler.db_manager:
+                        try:
+                            # Use the centralized function from llm_utilities
+                            from llm_utilities import should_use_tools_vector
+                            # Use vector-based tool selection with the embedding from memory_manager
+                            should_use_tool, suggested_tool = should_use_tools_vector(
+                                latest_user_msg, 
+                                None,  # We'll use memory_manager.get_embedding directly
+                                llm_handler.db_manager,
+                                similarity_threshold=0.70  # Adjust threshold to be more permissive
+                            )
+                            self.logger.info(f"Vector-based tool selection result: use={should_use_tool}, tool={suggested_tool or 'None'}")
+                            
+                            # Log the input that led to this decision for debugging
+                            self.logger.debug(f"Tool decision based on user message: '{latest_user_msg[:50]}...'")
+                        except Exception as e:
+                            self.logger.error(f"Error in vector-based tool selection: {str(e)}")
+                            should_use_tool = False
                 
                 # Add tools to the request when appropriate
                 if should_use_tool or in_tool_conversation:
-                    params["tools"] = tools
-                    self.logger.info("Including tools in request")
-                    
-                    # If we have a suggested tool, log more details about it
-                    if suggested_tool:
-                        self.logger.info(f"Selected tool: {suggested_tool}")
-                        # Find the tool definition to log its parameters
+                    # If we have a specific suggested tool, only include that one tool
+                    if should_use_tool and suggested_tool:
+                        # Filter to only include the suggested tool
+                        selected_tool_list = []
                         for tool in tools:
                             if "function" in tool and tool["function"].get("name") == suggested_tool:
+                                selected_tool_list.append(tool)
                                 params_schema = tool["function"].get("parameters", {})
+                                self.logger.info(f"Enforcing use of tool: {suggested_tool}")
                                 self.logger.debug(f"Tool parameters schema: {json.dumps(params_schema)}")
                                 break
+                        
+                        if selected_tool_list:
+                            # Only send the selected tool to the LLM
+                            params["tools"] = selected_tool_list
+                            
+                            # Modify the system message to explicitly instruct the LLM to use the selected tool
+                            system_message_modified = False
+                            for idx, msg in enumerate(formatted_messages):
+                                if msg["role"] == "system":
+                                    # Add instruction to use the specified tool
+                                    tool_instruction = f"\nFor this query, you MUST use the '{suggested_tool}' tool to get the information. " \
+                                                      f"Please use this tool properly with appropriate parameters to answer the user's question."
+                                    msg["content"] = msg["content"] + tool_instruction
+                                    formatted_messages[idx] = msg
+                                    system_message_modified = True
+                                    break
+                            
+                            # If no system message exists, create one with the tool instruction
+                            if not system_message_modified:
+                                tool_instruction = f"You are a helpful assistant. For this query, you MUST use the '{suggested_tool}' tool " \
+                                                 f"to get the information. Please use this tool properly with appropriate parameters to answer the user's question."
+                                formatted_messages.insert(0, {"role": "system", "content": tool_instruction})
+                            
+                            # Update the messages in the parameters
+                            params["messages"] = formatted_messages
+                            self.logger.info(f"Enforcing tool use for '{suggested_tool}' via system message")
+                            
+                            # DEBUGGING: Print the full context being sent to the LLM
+                            self.logger.debug("--- DEBUG: FULL CONTEXT BEING SENT TO LLM ---")
+                            for i, msg in enumerate(params["messages"]):
+                                self.logger.debug(f"Message {i} - Role: {msg['role']}")
+                                self.logger.debug(f"Content: {msg['content'][:100]}...")
+                            
+                            self.logger.debug("--- Tool information being sent: ---")
+                            for tool in params["tools"]:
+                                if "function" in tool:
+                                    self.logger.debug(f"Tool name: {tool['function'].get('name')}")
+                        else:
+                            # If we couldn't find the suggested tool, fall back to including all tools
+                            params["tools"] = tools
+                            self.logger.warning(f"Suggested tool '{suggested_tool}' not found in available tools, including all tools")
+                    else:
+                        # In a tool conversation or no specific tool suggested, include all tools
+                        params["tools"] = tools
+                        self.logger.info("Including all tools in request")
         
         # Send to Ollama API
         try:
@@ -366,6 +443,13 @@ class OllamaBackend(LLMBackend):
             response = ollama.chat(**params)
             content = response['message']['content']
             
+            # DEBUGGING: Print the LLM's response
+            self.logger.info("--- DEBUG: LLM RESPONSE ---")
+            self.logger.info(f"Response content: {content[:500]}...")
+            if len(content) > 500:
+                self.logger.info("(Response content truncated for log)")
+            self.logger.info("--- END LLM RESPONSE ---")
+            
             # Check for tool calls in the response
             tool_calls = []
             
@@ -376,14 +460,38 @@ class OllamaBackend(LLMBackend):
                 
                 # Process each tool call and ensure proper format
                 for tool_call in raw_tool_calls:
-                    self.logger.debug(f"Processing tool call: {json.dumps(tool_call)}")
+                    # Helper function to safely convert non-serializable objects to dictionaries
+                    def tool_call_to_dict(obj):
+                        if hasattr(obj, '__dict__'):
+                            return {k: tool_call_to_dict(v) for k, v in obj.__dict__.items() 
+                                   if not k.startswith('_')}
+                        elif isinstance(obj, dict):
+                            return {k: tool_call_to_dict(v) for k, v in obj.items()}
+                        elif isinstance(obj, (list, tuple)):
+                            return [tool_call_to_dict(x) for x in obj]
+                        else:
+                            return obj
                     
-                    # Make sure each tool call has a function field with name and arguments
-                    if 'function' not in tool_call and 'name' in tool_call:
-                        # Convert from flat format to nested format
+                    try:
+                        # Convert complex objects to dictionaries for logging
+                        tool_call_dict = tool_call_to_dict(tool_call)
+                        self.logger.debug(f"Processing tool call: {json.dumps(tool_call_dict)}")
+                    except (TypeError, ValueError):
+                        self.logger.debug(f"Processing tool call: {str(tool_call)}")
+                    
+                    # Standardize tool call format
+                    formatted_tool_call = None
+                    
+                    # Case 1: Dictionary format with function field
+                    if isinstance(tool_call, dict) and 'function' in tool_call:
+                        # Already in the correct format
+                        formatted_tool_call = tool_call.copy()
+                        
+                    # Case 2: Dictionary format with flat structure (name and arguments at top level)
+                    elif isinstance(tool_call, dict) and 'name' in tool_call:
+                        tool_name = tool_call.get('name')
+                        tool_args = tool_call.get('arguments', {})
                         tool_call_id = tool_call.get('id', f"call_{len(tool_calls)}")
-                        tool_name = tool_call.pop('name')
-                        tool_args = tool_call.pop('arguments', {})
                         
                         # Parse string arguments to JSON if needed
                         if isinstance(tool_args, str):
@@ -391,6 +499,7 @@ class OllamaBackend(LLMBackend):
                                 tool_args = json.loads(tool_args)
                             except json.JSONDecodeError:
                                 self.logger.warning(f"Failed to parse tool arguments as JSON: {tool_args}")
+                                tool_args = {}
                         
                         formatted_tool_call = {
                             'id': tool_call_id,
@@ -399,11 +508,68 @@ class OllamaBackend(LLMBackend):
                                 'arguments': tool_args
                             }
                         }
-                        self.logger.debug(f"Formatted tool call: {json.dumps(formatted_tool_call)}")
-                        tool_calls.append(formatted_tool_call)
+                        
+                    # Case 3: Object-style tool calls (from newer Ollama versions)
                     else:
-                        # Already in the correct format
-                        tool_calls.append(tool_call)
+                        try:
+                            tool_name = None
+                            tool_args = {}
+                            tool_id = None
+                            
+                            # Extract name
+                            if hasattr(tool_call, 'name'):
+                                tool_name = tool_call.name() if callable(getattr(tool_call, 'name', None)) else tool_call.name
+                            
+                            # Extract arguments
+                            if hasattr(tool_call, 'arguments'):
+                                tool_args = tool_call.arguments() if callable(getattr(tool_call, 'arguments', None)) else tool_call.arguments
+                            
+                            # Extract ID
+                            if hasattr(tool_call, 'id'):
+                                tool_id = tool_call.id() if callable(getattr(tool_call, 'id', None)) else tool_call.id
+                            else:
+                                tool_id = f"call_{len(tool_calls)}"
+                            
+                            # Parse string arguments if needed
+                            if isinstance(tool_args, str):
+                                try:
+                                    tool_args = json.loads(tool_args)
+                                except json.JSONDecodeError:
+                                    self.logger.warning(f"Failed to parse tool arguments as JSON: {tool_args}")
+                                    tool_args = {}
+                            
+                            # Special case: Handle date/time related queries
+                            if tool_name in ["unknown_tool", None] and "time" in latest_user_msg.lower() or "date" in latest_user_msg.lower():
+                                tool_name = "get_date_time"
+                                self.logger.info(f"Resolving unknown tool to 'get_date_time' based on query context")
+                            
+                            # Only add to formatted list if we have a tool name
+                            if tool_name:
+                                formatted_tool_call = {
+                                    'id': tool_id,
+                                    'function': {
+                                        'name': tool_name,
+                                        'arguments': tool_args
+                                    }
+                                }
+                            else:
+                                self.logger.warning(f"Skipping tool call due to missing tool name")
+                                
+                        except Exception as e:
+                            self.logger.error(f"Error processing object-style tool call: {str(e)}")
+                            self.logger.error(f"Tool call type: {type(tool_call)}")
+                            # Continue with next tool call
+                            continue
+                    
+                    # Add the formatted tool call if valid
+                    if formatted_tool_call:
+                        # Log the tool call before adding
+                        tool_name = formatted_tool_call['function'].get('name', 'unknown') if 'function' in formatted_tool_call else 'unknown'
+                        tool_args = formatted_tool_call['function'].get('arguments', {}) if 'function' in formatted_tool_call else {}
+                        self.logger.info(f"Adding tool call: {tool_name} with arguments: {json.dumps(tool_args)}")
+                        
+                        # Add to the list of tool calls
+                        tool_calls.append(formatted_tool_call)
                 
                 # Log the extracted parameters for verification
                 for idx, tool_call in enumerate(tool_calls):
@@ -411,6 +577,30 @@ class OllamaBackend(LLMBackend):
                         func_name = tool_call['function'].get('name', 'unknown')
                         func_args = tool_call['function'].get('arguments', {})
                         self.logger.info(f"Tool call {idx+1}: {func_name} with arguments: {json.dumps(func_args)}")
+            else:
+                self.logger.warning("LLM response did not contain any tool_calls")
+            
+            # If we have an enforced tool but no tool calls were made, try to extract parameters from content
+            # and create a synthetic tool call
+            if should_use_tool and suggested_tool and not tool_calls:
+                self.logger.warning(f"LLM didn't use the enforced tool '{suggested_tool}'. Attempting to extract parameters from content.")
+                
+                # Implement a simple parameter extraction for date/time tool - this can be enhanced later
+                if suggested_tool == "get_date_time":
+                    try:
+                        # Create a synthetic tool call with default parameters
+                        synthetic_tool_call = {
+                            'id': 'synthetic_call_0',
+                            'function': {
+                                'name': 'get_date_time',
+                                'arguments': {}  # Empty arguments will use defaults
+                            }
+                        }
+                        
+                        self.logger.info("Created synthetic tool call for get_date_time with default parameters")
+                        tool_calls.append(synthetic_tool_call)
+                    except Exception as e:
+                        self.logger.error(f"Error creating synthetic tool call: {str(e)}")
             
             return {
                 'content': content,
@@ -514,7 +704,7 @@ class LlamaCppBackend(LLMBackend):
                     None,  # Use memory_manager.get_embedding directly
                     llm_handler.db_manager
                 )
-                self.logger.info(f"Vector-based tool selection result: use={should_use_function_calling}, tool={suggested_tool or 'None'}")
+                self.logger.info(f": use={should_use_function_calling}, tool={suggested_tool or 'None'}")
             else:
                 # Fall back to keyword-based tool selection
                 should_use_function_calling, suggested_tool = should_use_tools(messages, tools)
