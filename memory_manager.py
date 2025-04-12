@@ -380,7 +380,7 @@ class DualMemoryManager:
                     user_input=user_message,
                     conversation_history=conversation_history,
                     additional_context=additional_context if additional_context else None,
-                    include_tools=True,  # Always include tools, the LLM handler will filter as needed
+                    include_tools=is_tool_query,  
                     specific_tool=specific_tool  # Pass the identified tool if any
                 )
                 logger.info(f"Received response of type: {type(llm_response)}")
@@ -407,9 +407,10 @@ class DualMemoryManager:
                         tool_name = tool_call['function']['name'] if 'function' in tool_call else "unknown_tool"
                         
                         # Enhance the raw tool response with natural language
-                        from llm_utilities import enhance_tool_response
-                        enhanced_response = enhance_tool_response(user_message, tool_name, tool_result)
-                        
+                        #from llm_utilities import enhance_tool_response
+                        #enhanced_response = enhance_tool_response(user_message, tool_name, tool_result)
+                        enhanced_response = tool_result
+
                         # Store the tool result in short-term memory
                         self._add_to_short_term('tool', enhanced_response, tool_call_id=tool_call.get('id', '0'), name=tool_name)
                         

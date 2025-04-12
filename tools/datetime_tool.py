@@ -1,7 +1,7 @@
 """
 Date and time tool for Funes
 
-This tool provides current date and time information, optionally in a specific timezone.
+This tool provides current date and time information based on a specific location and timezone
 """
 
 import datetime
@@ -17,16 +17,20 @@ class DateTimeTool(GenericTool):
     
     @property
     def description(self) -> str:
-        return "Get the current date and time, optionally in a specified timezone"
+        return "Get the current date and time for a specified location"
     
     @property
     def parameters(self) -> Dict[str, Any]:
         return {
             "type": "object",
             "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "Location to get the date/time for (e.g. 'New York', 'London', 'Tokyo'). Expected to be extracted from user query."
+                },
                 "timezone": {
                     "type": "string",
-                    "description": "Timezone to return the date/time in (e.g. 'UTC', 'US/Pacific', 'Europe/London'). If not specified, local system time is used."
+                    "description": "Timezone identifier (e.g. 'America/New_York', 'Europe/London', 'Asia/Tokyo'). Expected to be defined by Funes based on the location.",
                 },
                 "format": {
                     "type": "string",
@@ -35,7 +39,7 @@ class DateTimeTool(GenericTool):
                     "default": "full"
                 }
             },
-            "required": []
+            "required": ["location", "timezone"]
         }
     
     @property
@@ -45,16 +49,17 @@ class DateTimeTool(GenericTool):
         """
         return False
     
-    def execute(self, timezone: Optional[str] = None, format: str = "full") -> str:
+    def execute(self, location: str, timezone: str, format: str = "full") -> str:
         """
-        Get the current date and time.
+        Get the current date and time for a specified location.
         
         Args:
-            timezone: Optional timezone name (e.g. 'UTC', 'US/Pacific')
+            location: Location name extracted from user query
+            timezone: Timezone identifier that the LLM knows based on the location
             format: Format to return ('full', 'date', 'time', or 'iso')
             
         Returns:
-            Current date and time as a string
+            Current date and time as a formatted string
         """
         try:
             # Get the current time
@@ -66,25 +71,21 @@ class DateTimeTool(GenericTool):
                     import pytz
                     tz = pytz.timezone(timezone)
                     now = datetime.datetime.now(tz)
-                    tz_info = f" ({timezone})"
+                    location_info = f" in {location} ({timezone})"
                 except (ImportError, pytz.exceptions.UnknownTimeZoneError):
                     # If pytz is not installed or timezone is invalid, use system time
-                    tz_info = " (system timezone - pytz not available or invalid timezone)"
+                    location_info = f" (system time - could not determine timezone for {location})"
             else:
-                tz_info = " (system timezone)"
+                location_info = f" (system time - no timezone provided for {location})"
             
-            # Format the time according to the format parameter
+            # Format the response based on the requested format
             if format.lower() == "date":
-                result = now.strftime("%Y-%m-%d")
-                return f"Current date: {result}{tz_info}"
+                return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {now.strftime('%d').lstrip('0')}, {now.strftime('%Y')}{location_info}."
             elif format.lower() == "time":
-                result = now.strftime("%H:%M:%S")
-                return f"Current time: {result}{tz_info}"
+                return f"The current time is {now.strftime('%I:%M:%S %p')}{location_info}."
             elif format.lower() == "iso":
-                result = now.isoformat()
-                return result
+                return f"{now.isoformat()}"
             else:  # "full" is the default
-                result = now.strftime("%Y-%m-%d %H:%M:%S")
-                return f"Current date and time: {result}{tz_info}"
+                return f"It is currently {now.strftime('%I:%M:%S %p')} on {now.strftime('%A')}, {now.strftime('%B')} {now.strftime('%d').lstrip('0')}, {now.strftime('%Y')}{location_info}."
         except Exception as e:
             return f"Error retrieving date/time information: {str(e)}"

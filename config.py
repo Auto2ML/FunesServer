@@ -5,11 +5,11 @@ import logging
 
 # LLM model configuration
 LLM_CONFIG = {
-    'model_name': 'llama3.2:1b',  # Default model name
+    'model_name': 'llama3.2:latest',  # Default model name
     'backend_type': 'ollama',  # Options: 'ollama' # Commented out: 'llamacpp', 'huggingface', 'llamafile'
     #'model_name': '/home/julio/.ollama/models/blobs/sha256-dde5aa3fc5ffc17176b5e8bdc82f587b24b2678c6c66101bf7da77af9f7ccdff',
     # 'llamafile_api_url': "http://localhost:8080/v1",  # Default URL for Llamafile API (OpenAI-compatible format)
-    'system_prompt': "Your name is Funes, a general purpose AI assistant. Use your recent conversation history and relevant memories stored in your database to provide more informed and consistent responses, only if it is relevant for the conversation. Do not repeat unnecessary information. If you don't find relevant information in history or memories, use your training data",
+    'system_prompt': "Your name is Funes, a general purpose AI assistant. Use your recent conversation history and relevant memories stored in your database to provide more informed and consistent responses, only if it is relevant for the conversation. Do not repeat unnecessary information. If you don't find relevant information in history or memories, use your training data. When using tools, prefer natural language formatting for responses by setting response_format to 'natural' when available to provide more conversational interactions.",
     'tool_use_prompt': "You have access to the following tools: {tools_description}. Only use these tools when necessary, such as for getting real-time information or performing specific actions that cannot be answered using your existing knowledge or memory context. For questions about general knowledge, facts, concepts, or information included in your training data, respond directly without using tools. If the user's query can be answered using context from memory or your training data, prefer those sources over tools.",
     'vector_tool_selection': True,  # Enable vector-based tool selection using database similarity search
     # Models with known good tool support - this is for documentation purposes only

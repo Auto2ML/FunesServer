@@ -53,25 +53,23 @@ def get_tool(name: str) -> Optional[GenericTool]:
         return _registered_tools[name]
     
     # Common known variations dictionary 
-    # This can be expanded as new tools are added and common variations are discovered
-    variation_map = {
-        # Date/time variations
-        "unknown_tool": "get_date_time",  # Special case for Ollama's default
-        "date_time": "get_date_time",
-        "datetime": "get_date_time",
-        "time": "get_date_time",
-        # Weather variations
-        "weather": "get_weather",
-        "forecast": "get_weather",
-        # Add more mappings as needed for future tools
-    }
+    # This is a generic map for variations of tool names, without special cases
+    variation_map = {}
     
-    # Check if this is a known variation
-    if name.lower() in variation_map:
-        mapped_name = variation_map[name.lower()]
-        if mapped_name in _registered_tools:
-            logger.info(f"Resolving '{name}' to '{mapped_name}' using variation map")
-            return _registered_tools[mapped_name]
+    # Try a generic approach to tool resolution
+    # First, try direct lookup based on available tools
+    if _registered_tools:
+        # For generic "unknown_tool" case, try to find the most appropriate tool
+        if name.lower() == "unknown_tool" or name is None:
+            # We'll let the caller resolve this based on query content
+            return None
+        
+        # Check if this is a known variation (for backward compatibility)
+        if name.lower() in variation_map:
+            mapped_name = variation_map[name.lower()]
+            if mapped_name in _registered_tools:
+                logger.info(f"Resolving '{name}' to '{mapped_name}' using variation map")
+                return _registered_tools[mapped_name]
     
     # Try prefix handling (works for any tool, not just specific ones)
     name_lower = name.lower()
@@ -103,6 +101,19 @@ def get_tool(name: str) -> Optional[GenericTool]:
                 
     # No match found
     return None
+
+def get_available_functions() -> Dict[str, callable]:
+    """
+    Get a dictionary of all registered tool functions that can be called.
+    
+    Returns:
+        Dictionary mapping tool names to their execute methods
+    """
+    available_functions = {}
+    for name, tool in _registered_tools.items():
+        available_functions[name] = tool.execute
+    
+    return available_functions
 
 def get_available_tools() -> List[Dict[str, Any]]:
     """

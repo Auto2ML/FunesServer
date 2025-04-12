@@ -338,7 +338,49 @@ def enhance_tool_response(user_query: str, tool_name: str, tool_result: str) -> 
         result_data = None
         is_json = False
     
-    # Category-specific formatting
+    # Handle natural datetime formatting
+    if tool_category == "datetime" and is_json and isinstance(result_data, dict):
+        # Check if this is our enhanced datetime format with detailed time components
+        if "type" in result_data and "weekday" in result_data and "month" in result_data:
+            # This is our enhanced datetime format
+            data_type = result_data.get("type", "full")
+            tz_info = f" in {result_data.get('timezone')}" if result_data.get('timezone') != "system" else ""
+            
+            # Build natural language response based on data type
+            if data_type == "date":
+                # Format: "Today is Monday, April 15, 2025"
+                return f"Today is {result_data['weekday']}, {result_data['month']} {result_data['day']}, {result_data['year']}{tz_info}."
+            
+            elif data_type == "time":
+                # Format: "It's currently 2:30 PM"
+                if int(result_data['minute']) == 0:
+                    # For even hours, use simpler format
+                    return f"It's {result_data['hour']} {result_data['am_pm']}{tz_info}."
+                else:
+                    return f"It's {result_data['hour']}:{result_data['minute']} {result_data['am_pm']}{tz_info}."
+            
+            else:  # full format
+                # Create more natural date/time expressions
+                weekday = result_data['weekday']
+                month = result_data['month']
+                day = result_data['day']
+                year = result_data['year']
+                hour = result_data['hour']
+                minute = result_data['minute']
+                am_pm = result_data['am_pm']
+                
+                # Select different formats randomly based on query hash for variety
+                formats = [
+                    f"It's {hour}:{minute} {am_pm} on {weekday}, {month} {day}, {year}{tz_info}.",
+                    f"The current time is {hour}:{minute} {am_pm} on {weekday}, {month} {day}{tz_info}.",
+                    f"Right now it's {hour}:{minute} {am_pm}, {month} {day}, {year}{tz_info}."
+                ]
+                
+                # Choose format based on hash of query
+                format_index = hash(user_query) % len(formats)
+                return formats[format_index]
+                
+    # Category-specific formatting for other JSON data
     if tool_category == "weather" and is_json:
         # Format weather results in a natural way
         if isinstance(result_data, dict):
@@ -359,7 +401,7 @@ def enhance_tool_response(user_query: str, tool_name: str, tool_result: str) -> 
                 return f"I checked the weather in {location}. It's currently {temp}{units} with {cond.lower() if isinstance(cond, str) else ''} conditions."
     
     elif tool_category == "datetime" and is_json:
-        # Format datetime results naturally
+        # Format datetime results naturally (old format handling)
         if isinstance(result_data, dict):
             date = result_data.get("date") or result_data.get("current_date")
             time = result_data.get("time") or result_data.get("current_time")
