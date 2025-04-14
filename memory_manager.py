@@ -343,9 +343,14 @@ class DualMemoryManager:
             logger.info("Building additional context...")
             additional_context = ""
             if long_term_memories:
-                additional_context = "Relevant past memories:\n"
-                for memory in long_term_memories:
-                    additional_context += f"- {memory[0]}\n"
+                additional_context = "====== RELEVANT PAST MEMORIES ======\n"
+                for i, memory in enumerate(long_term_memories):
+                    # Add a separator between memories and number them for clarity
+                    additional_context += f"MEMORY #{i+1}:\n{memory[0]}\n"
+                    if i < len(long_term_memories) - 1:
+                        additional_context += "----------\n"
+                additional_context += "====================================\n"
+                additional_context += "Use the above memories to inform your response when relevant."
             
             # Add the user message to short-term memory
             logger.info("Adding user message to short-term memory...")
@@ -400,11 +405,32 @@ class DualMemoryManager:
                 tool_results = []
                 for tool_call in llm_response['tool_calls']:
                     try:
-                        # Execute the tool
-                        tool_result = tools.execute_tool_call(tool_call)
-                        
-                        # Get the tool name for more context
+                        # Extract tool name and arguments from the tool call
                         tool_name = tool_call['function']['name'] if 'function' in tool_call else "unknown_tool"
+                        arguments = tool_call['function']['arguments'] if 'function' in tool_call else {}
+                        
+                        # Parse arguments if they're a string
+                        if isinstance(arguments, str):
+                            try:
+                                arguments = json.loads(arguments)
+                            except json.JSONDecodeError:
+                                logger.error(f"Error: Invalid JSON in arguments: {arguments}")
+                                tool_results.append(f"Error: Invalid JSON in arguments: {arguments}")
+                                continue
+                        
+                        # Get the tool and execute it directly (same approach as LLMHandler)
+                        tool = tools.get_tool(tool_name)
+                        if tool:
+                            logger.info(f"Calling function: {tool_name}")
+                            logger.info(f"Arguments: {arguments}")
+                            
+                            # Call the function with its arguments directly
+                            tool_result = tool.execute(**arguments)
+                            logger.info(f"Function output: {tool_result}")
+                        else:
+                            error_msg = f"Error: Unknown tool '{tool_name}'"
+                            logger.error(error_msg)
+                            tool_result = error_msg
                         
                         # Enhance the raw tool response with natural language
                         #from llm_utilities import enhance_tool_response
