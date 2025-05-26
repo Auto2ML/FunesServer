@@ -1,4 +1,4 @@
-# DISCLAIMER: This code is experimental and wor in progress. It is a great tool to learn and should be regarded as that. You will find bugs and things that don't work.
+# DISCLAIMER: This code is experimental and work in progress. It is a great tool to learn and should be regarded as that. You will find bugs and things that don't work.
 # Most of the code was written by different versions of Claude (Sonnet 3.5, 3.7 and Opus 4), closely supervised by me. This was part of the learning journey too.
 
 # Funes: Enhanced LLM Memory System with RAG Pipeline
