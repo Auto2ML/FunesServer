@@ -1,5 +1,6 @@
-# DISCLAIMER: This code is experimental and work in progress. It is a great tool to learn and should be regarded as that. You will find bugs and things that don't work.
-# Most of the code was written by different versions of Claude (Sonnet 3.5, 3.7 and Opus 4), closely supervised by me. This was part of the learning journey too.
+# DISCLAIMER
+## This code is experimental and work in progress. It is a great tool to learn and should be regarded as that. You will find bugs and things that don't work.
+## Most of the code was written by different versions of Claude (Sonnet 3.5, 3.7 and Opus 4), closely supervised by me. This was part of the learning journey too.
 
 # Funes: Enhanced LLM Memory System with RAG Pipeline
 
@@ -258,8 +259,26 @@ This architecture allows Funes to provide more accurate, contextual responses ba
 Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
+Copyright (c) 2025 AUTO2ML - J. Rodriguez Martino
 
-[Add your license information here]
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 
 ## Acknowledgments
 
