@@ -273,12 +273,14 @@ class DualMemoryManager:
                         user_message,
                         None,  # We'll use the existing get_embedding function
                         db_manager,
-                        similarity_threshold=0.6  # Lower threshold for better tool detection
+                        similarity_threshold=0.75  
                     )
                     logger.info(f"Vector-based tool selection result: is_tool_query={is_tool_query}, tool={suggested_tool or 'None'}")
                     
                     # If no tool was found, also try the keyword-based approach as backup
-                    if not is_tool_query:
+                    
+                    # If vector-based tool selection didn't find any tools, try keyword-based approach as fallback
+                    """ if not is_tool_query:
                         logger.info("Vector-based selection found no tools, trying keyword-based fallback")
                         try:
                             from llm_utilities import should_use_tools
@@ -302,8 +304,8 @@ class DualMemoryManager:
                                 suggested_tool = suggested_tool_kw
                                 logger.info(f"Keyword-based tool selection found: {suggested_tool}")
                         except Exception as kw_e:
-                            logger.error(f"Error in keyword-based fallback: {str(kw_e)}")
-                            
+                            logger.error(f"Error in keyword-based fallback: {str(kw_e)}") """
+                
             except Exception as e:
                 logger.error(f"Error in vector-based tool selection: {str(e)}")
                 logger.error(f"Traceback: {traceback.format_exc()}")

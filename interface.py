@@ -219,6 +219,27 @@ def setup_gradio():
             font-size: 0.8em;
             margin-left: 8px;
         }
+        /* Change "bot" to "Funes" in chat interface */
+        .message.bot .name::before {
+            content: "Funes";
+            visibility: visible;
+        }
+        .message.bot .name {
+            color: transparent;
+            font-size: 0;
+        }
+        .message.bot .name::after {
+            content: "";
+            visibility: hidden;
+        }
+        /* Alternative approach for different Gradio versions */
+        .chatbot .message-row:not(.user) .avatar-container + .message-content::before {
+            content: "Funes";
+            font-weight: bold;
+            color: #2196F3;
+            margin-bottom: 4px;
+            display: block;
+        }
     """) as demo:
         gr.Markdown("# 🧠 Funes: LLM with Dual Memory")
         
@@ -230,7 +251,9 @@ def setup_gradio():
                         height=500,
                         show_label=False,
                         bubble_full_width=False,
-                        avatar_images=(None, "🧠"),
+                        avatar_images=("👤", "🧠"),
+                        show_copy_button=True,
+                        placeholder="Start a conversation with Funes..."
                     )
                     
                     with gr.Row():
