@@ -36,7 +36,7 @@ class EmbeddingManager:
     def initialize_embedding_model(self):
         """Initialize the embedding model based on configuration"""
         try:
-            model_name = self.embedding_config.get('model', 'all-MiniLM-L6-v2')
+            model_name = self.embedding_config.get('model_name', 'all-MiniLM-L6-v2')
             self.logger.info(f"Loading embedding model: {model_name}")
             self.embedding_model = SentenceTransformer(model_name)
             self.logger.info("Embedding model loaded successfully")
@@ -140,24 +140,6 @@ class DualMemoryManager:
         # Use the embedding manager
         self.embedding_manager = embedding_manager
         
-        # Initialize database connection with error checking
-        try:
-            logger.info("[DualMemoryManager] Initializing database connection with params: %s", self.db_params)
-            self.db_manager = DatabaseManager(self.db_params)
-            logger.info("[DualMemoryManager] Database connection initialized successfully")
-            # Test the connection with a simple query
-            try:
-                sources = self.db_manager.get_unique_sources()
-                logger.info(f"[DualMemoryManager] Database connection test successful. Found {len(sources)} sources.")
-            except Exception as e:
-                logger.error(f"[DualMemoryManager] Database connection test failed: {str(e)}")
-        except Exception as e:
-            logger.error(f"[DualMemoryManager] Error initializing database connection: {str(e)}")
-            logger.error(f"[DualMemoryManager] Traceback: {traceback.format_exc()}")
-            # Continue without crashing, but flag the database as unavailable
-            self.db_manager = None
-            logger.warning("[DualMemoryManager] Continuing with database features disabled")
-        
         # Chat history for UI
         self.chat_history = []
         
@@ -207,16 +189,12 @@ class DualMemoryManager:
     def store_memory(self, context, source='chat'):
         """Store memory in long-term storage (PostgreSQL)"""
         try:
-            # Check if database connection is available
-            if self.db_manager is None:
-                logger.warning("[store_memory] Database connection not available, skipping memory storage")
-                return
-                
-            logger.info(f"[store_memory] Generating embedding for context: {context[:30]}...")
-            embedding = self.embedding_manager.get_embedding(context)
-            logger.info(f"[store_memory] Embedding generated, storing in database with source: {source}")
-            self.db_manager.insert_memory(context, embedding, source)
-            logger.info("[store_memory] Memory stored successfully")
+            with DatabaseManager(self.db_params) as db_manager:
+                logger.info(f"[store_memory] Generating embedding for context: {context[:30]}...")
+                embedding = self.embedding_manager.get_embedding(context)
+                logger.info(f"[store_memory] Embedding generated, storing in database with source: {source}")
+                db_manager.insert_memory(context, embedding, source)
+                logger.info("[store_memory] Memory stored successfully")
         except Exception as e:
             logger.error(f"[store_memory] Error storing memory: {str(e)}")
             logger.error(f"[store_memory] Traceback: {traceback.format_exc()}")
@@ -232,21 +210,26 @@ class DualMemoryManager:
         # Default to False if tool not found
         return False
     
+    def get_unique_sources(self):
+        """Get unique sources from the database"""
+        try:
+            with DatabaseManager(self.db_params) as db_manager:
+                return db_manager.get_unique_sources()
+        except Exception as e:
+            logger.error(f"Error getting unique sources: {str(e)}")
+            return []
+    
     def retrieve_relevant_memories(self, query, top_k=None):
         """Retrieve relevant memories from long-term storage"""
         try:
-            # Check if database connection is available
-            if self.db_manager is None:
-                logger.warning("[retrieve_relevant_memories] Database connection not available, returning empty list")
-                return []
-                
-            top_k = top_k or MEMORY_CONFIG['default_top_k']
-            logger.info(f"[retrieve_relevant_memories] Generating embedding for query: {query[:30]}...")
-            query_embedding = self.embedding_manager.get_embedding(query)
-            logger.info(f"[retrieve_relevant_memories] Embedding generated, retrieving top {top_k} memories")
-            memories = self.db_manager.retrieve_memories(query_embedding, top_k)
-            logger.info(f"[retrieve_relevant_memories] Retrieved {len(memories)} memories")
-            return memories
+            with DatabaseManager(self.db_params) as db_manager:
+                top_k = top_k or MEMORY_CONFIG['default_top_k']
+                logger.info(f"[retrieve_relevant_memories] Generating embedding for query: {query[:30]}...")
+                query_embedding = self.embedding_manager.get_embedding(query)
+                logger.info(f"[retrieve_relevant_memories] Embedding generated, retrieving top {top_k} memories")
+                memories = db_manager.retrieve_memories(query_embedding, top_k)
+                logger.info(f"[retrieve_relevant_memories] Retrieved {len(memories)} memories")
+                return memories
         except Exception as e:
             logger.error(f"[retrieve_relevant_memories] Error retrieving memories: {str(e)}")
             logger.error(f"[retrieve_relevant_memories] Traceback: {traceback.format_exc()}")
@@ -285,16 +268,45 @@ class DualMemoryManager:
             try:
                 # Use the centralized function from llm_utilities
                 from llm_utilities import should_use_tools_vector
-                if self.db_manager:
+                with DatabaseManager(self.db_params) as db_manager:
                     is_tool_query, suggested_tool = should_use_tools_vector(
                         user_message,
                         None,  # We'll use the existing get_embedding function
-                        self.db_manager,
-                        similarity_threshold=0.75
+                        db_manager,
+                        similarity_threshold=0.6  # Lower threshold for better tool detection
                     )
                     logger.info(f"Vector-based tool selection result: is_tool_query={is_tool_query}, tool={suggested_tool or 'None'}")
+                    
+                    # If no tool was found, also try the keyword-based approach as backup
+                    if not is_tool_query:
+                        logger.info("Vector-based selection found no tools, trying keyword-based fallback")
+                        try:
+                            from llm_utilities import should_use_tools
+                            # Get available tools for keyword-based detection
+                            available_tools = []
+                            for tool_name in tools.get_all_tools():
+                                tool = tools.get_tool(tool_name)
+                                if tool:
+                                    available_tools.append({
+                                        'function': {
+                                            'name': tool.name,
+                                            'description': tool.description
+                                        }
+                                    })
+                            
+                            # Create a simple message format for the keyword function
+                            messages = [{'role': 'user', 'content': user_message}]
+                            is_tool_query_kw, suggested_tool_kw = should_use_tools(messages, available_tools)
+                            if is_tool_query_kw:
+                                is_tool_query = True
+                                suggested_tool = suggested_tool_kw
+                                logger.info(f"Keyword-based tool selection found: {suggested_tool}")
+                        except Exception as kw_e:
+                            logger.error(f"Error in keyword-based fallback: {str(kw_e)}")
+                            
             except Exception as e:
                 logger.error(f"Error in vector-based tool selection: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 # Fall back to keyword-based detection in case of error
                 is_tool_query = False
             
@@ -376,19 +388,19 @@ class DualMemoryManager:
             logger.info("Generating LLM response...")
             try:
                 # Make sure the LLM handler has access to the database manager for vector tool selection
-                if not hasattr(self.llm_handler, 'db_manager') or self.llm_handler.db_manager is None:
-                    self.llm_handler.db_manager = self.db_manager
-                    logger.info("Set db_manager reference in LLM handler")
-                
-                # Pass specific_tool to generate_response if we identified one
-                llm_response = self.llm_handler.generate_response(
-                    user_input=user_message,
-                    conversation_history=conversation_history,
-                    additional_context=additional_context if additional_context else None,
-                    include_tools=is_tool_query,  
-                    specific_tool=specific_tool  # Pass the identified tool if any
-                )
-                logger.info(f"Received response of type: {type(llm_response)}")
+                with DatabaseManager(self.db_params) as db_manager:
+                    if not hasattr(self.llm_handler, 'db_manager') or self.llm_handler.db_manager is None:
+                        self.llm_handler.db_manager = db_manager
+                        logger.info("Set db_manager reference in LLM handler")
+                    
+                    # Generate response using LLM handler
+                    llm_response = self.llm_handler.generate_response(
+                        user_input=user_message,
+                        conversation_history=conversation_history,
+                        additional_context=additional_context if additional_context else None,
+                        include_tools=is_tool_query
+                    )
+                    logger.info(f"Received response of type: {type(llm_response)}")
             except Exception as e:
                 logger.error(f"Error generating LLM response: {str(e)}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
@@ -463,13 +475,67 @@ class DualMemoryManager:
                 return display_response
             else:
                 logger.info("Response is a simple text response")
-                # Just a regular text response (or the LLM didn't make a tool call even though it should have)
+                # Check if this looks like a tool description that we should execute
                 response_content = llm_response['content'] if isinstance(llm_response, dict) else llm_response
+                
+                # Try to detect if this is a tool-related response that should be executed
+                tool_executed = False
+                if is_tool_query and suggested_tool:
+                    logger.info(f"Tool query detected but no tool call in response. Attempting to execute {suggested_tool}")
+                    try:
+                        # Try to execute the tool based on the user query
+                        tool = tools.get_tool(suggested_tool)
+                        if tool:
+                            if suggested_tool == "get_date_time":
+                                # Parse location from user message
+                                location = "Madrid"  # Default
+                                timezone = "Europe/Madrid"  # Default
+                                
+                                # Simple location detection
+                                user_lower = user_message.lower()
+                                if "madrid" in user_lower:
+                                    location = "Madrid"
+                                    timezone = "Europe/Madrid"
+                                elif "london" in user_lower:
+                                    location = "London"
+                                    timezone = "Europe/London"
+                                elif "new york" in user_lower:
+                                    location = "New York"
+                                    timezone = "America/New_York"
+                                elif "tokyo" in user_lower:
+                                    location = "Tokyo"
+                                    timezone = "Asia/Tokyo"
+                                elif "paris" in user_lower:
+                                    location = "Paris"
+                                    timezone = "Europe/Paris"
+                                
+                                # Determine format
+                                format_type = "full"
+                                if "time" in user_lower and "date" not in user_lower:
+                                    format_type = "time"
+                                elif "date" in user_lower and "time" not in user_lower:
+                                    format_type = "date"
+                                
+                                logger.info(f"Executing datetime tool for {location} with format {format_type}")
+                                tool_result = tool.execute(
+                                    location=location,
+                                    timezone=timezone,
+                                    format=format_type
+                                )
+                                
+                                # Use the tool result as the response
+                                response_content = tool_result
+                                tool_executed = True
+                                logger.info(f"Successfully executed {suggested_tool}: {tool_result}")
+                    except Exception as e:
+                        logger.error(f"Error manually executing tool {suggested_tool}: {str(e)}")
+                
+                # If we didn't execute a tool, use the original response
                 self._add_to_short_term('assistant', response_content)
                 self.chat_history.append((user_message, response_content))
                 
                 # Only store in long-term memory if this is NOT a tool interaction
-                if not is_tool_query:
+                if not is_tool_query and not tool_executed:
                     # Store user message in long-term memory
                     logger.info("Storing user message memory...")
                     try:
@@ -501,7 +567,7 @@ class DualMemoryManager:
                     except Exception as e:
                         logger.error(f"Error storing memory: {str(e)}")
                 else:
-                    logger.info("Skipping memory storage for tool query response")
+                    logger.info("Skipping memory storage for tool query/execution response")
                 
                 return response_content
                 

@@ -1,6 +1,8 @@
 import gradio as gr
-from memory_manager import DualMemoryManager
+from memory_manager import DualMemoryManager, embedding_manager
 from rag_system import RAGSystem
+from database import DatabaseManager
+from config import DB_CONFIG
 import json
 import logging
 import tools
@@ -10,9 +12,6 @@ logger = logging.getLogger('Interface')
 
 # Create memory manager instance
 memory_manager = DualMemoryManager()
-
-# Initialize RAG system
-rag_system = RAGSystem(memory_manager.db_params)
 
 # Global variable to store the last accessed memories
 last_accessed_memories = []
@@ -82,43 +81,49 @@ def clear_chat_history():
 
 def refresh_sources():
     """Refresh the list of sources in the dropdown"""
-    return gr.Dropdown(choices=memory_manager.db_manager.get_unique_sources())
+    with DatabaseManager(DB_CONFIG) as db_manager:
+        return gr.Dropdown(choices=db_manager.get_unique_sources())
 
 def delete_memories_by_source_interface(source):
     """Delete memories by source interface"""
     if source:
-        memory_manager.db_manager.delete_memories_by_source(source)
+        with DatabaseManager(DB_CONFIG) as db_manager:
+            db_manager.delete_memories_by_source(source)
         return f"Memories related to '{source}' deleted successfully."
     return "No source selected."
 
 def clear_memories_interface():
     """Gradio memory clearing interface"""
-    memory_manager.db_manager.clear_memories()
+    with DatabaseManager(DB_CONFIG) as db_manager:
+        db_manager.clear_memories()
     return "All memories cleared successfully."
 
 def upload_file_interface(file):
     """Handle file upload and processing"""
     if file is not None:
-        rag_system.process_file(file.name)
+        with DatabaseManager(DB_CONFIG) as db_manager:
+            rag_system = RAGSystem(db_manager=db_manager, embedding_manager=embedding_manager)
+            rag_system.process_file(file.name)
         return f"File '{file.name}' processed successfully and added to long-term memory."
     return "No file uploaded."
 
 def get_memory_stats():
     """Get basic memory statistics"""
     try:
-        # Get unique sources
-        sources = memory_manager.db_manager.get_unique_sources()
-        
-        # Count total memories
-        memory_count = 0
-        source_counts = {}
-        
-        for source in sources:
-            # This would require a new method in DatabaseManager to count memories by source
-            # For now, we'll just show the source names
-            source_counts[source] = "✓"
+        with DatabaseManager(DB_CONFIG) as db_manager:
+            # Get unique sources
+            sources = db_manager.get_unique_sources()
             
-        return f"**Sources in Memory:** {len(sources)}"
+            # Count total memories
+            memory_count = 0
+            source_counts = {}
+            
+            for source in sources:
+                # This would require a new method in DatabaseManager to count memories by source
+                # For now, we'll just show the source names
+                source_counts[source] = "✓"
+                
+            return f"**Sources in Memory:** {len(sources)}"
     except Exception as e:
         logger.error(f"Error getting memory stats: {str(e)}")
         return "**Memory Stats:** Error retrieving statistics"
@@ -325,7 +330,7 @@ def setup_gradio():
                     with gr.Row():
                         source_dropdown = gr.Dropdown(
                             label="Select Source to Delete",
-                            choices=memory_manager.db_manager.get_unique_sources(),
+                            choices=memory_manager.get_unique_sources(),
                             interactive=True
                         )
                         refresh_btn = gr.Button("🔄 Refresh Sources")

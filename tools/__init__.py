@@ -1,10 +1,3 @@
-"""
-Tools package for Funes
-
-This package contains all the tools available for use by Funes.
-Each tool should be defined in its own file and registered in this __init__.py file.
-"""
-
 import importlib
 import os
 import inspect
@@ -38,7 +31,8 @@ def get_tool(name: str) -> Optional[GenericTool]:
     
     This function uses multiple strategies to find a tool:
     1. Direct lookup by exact name
-    2. Known common name variations (e.g., "date_time" → "get_date_time")
+    2. Known common name variations (e.g., "date_time" 
+ "get_date_time")
     3. Prefix handling (adding/removing "get_")
     4. Basic fuzzy matching for similar tool names
     
@@ -89,7 +83,7 @@ def get_tool(name: str) -> Optional[GenericTool]:
             return _registered_tools[registered_name]
     
     # Handle commands that might contain the tool name
-    # For example, "get the weather for Paris" → "get_weather"
+    # For example, "get the weather for Paris" -> "get_weather"
     if _registered_tools:  # Only try this if we have tools registered
         for tool_name in _registered_tools:
             # Extract the meaningful part of the tool name without "get_" prefix
@@ -184,20 +178,19 @@ def store_tools_in_database() -> None:
         embedding_model = SentenceTransformer(model_name)
         
         # Connect to the database
-        db_manager = DatabaseManager(DB_CONFIG)
-        
-        # Process each registered tool
-        for tool_name, tool in _registered_tools.items():
-            # Use only the tool name and description for embeddings
-            description = tool.description
-            
-            # Generate embedding for the tool name and description only
-            logger.info(f"Generating embedding for tool: {tool_name}")
-            embedding = embedding_model.encode(description)
-            
-            # Store in database
-            db_manager.store_tool_embedding(tool_name, description, embedding.tolist())
-            logger.info(f"Stored embedding for tool: {tool_name}")
+        with DatabaseManager(DB_CONFIG) as db_manager:
+            # Process each registered tool
+            for tool_name, tool in _registered_tools.items():
+                # Use only the tool name and description for embeddings
+                description = tool.description
+                
+                # Generate embedding for the tool name and description only
+                logger.info(f"Generating embedding for tool: {tool_name}")
+                embedding = embedding_model.encode(description)
+                
+                # Store in database
+                db_manager.store_tool_embedding(tool_name, description, embedding.tolist())
+                logger.info(f"Stored embedding for tool: {tool_name}")
             
         logger.info("Tool embeddings stored in database successfully")
     except Exception as e:
@@ -243,3 +236,7 @@ def _discover_tools() -> None:
 
 # Call the discovery function when the module is imported
 _discover_tools()
+
+def get_all_tools() -> List[str]:
+    """Get all registered tool names"""
+    return list(_registered_tools.keys())

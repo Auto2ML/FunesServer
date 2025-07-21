@@ -78,8 +78,7 @@ class LLMHandler:
     
     def generate_response(self, user_input: str, conversation_history: List[Dict[str, Any]], 
                           additional_context: str = None,
-                          include_tools: bool = True,
-                          specific_tool: str = None) -> Union[str, Dict[str, Any]]:
+                          include_tools: bool = True) -> Union[str, Dict[str, Any]]:
         """Generate a response using Ollama"""
         try:
             # Create a new copy of the conversation history
@@ -92,32 +91,8 @@ class LLMHandler:
             # Only process tools if include_tools is True
             if include_tools:
                 try:
-                    if specific_tool:
-                        # If a specific tool is specified, only use that one
-                        tool = tools.get_tool(specific_tool)
-                        if tool:
-                            # Create a list with just this one tool
-                            available_tools = [{
-                                "type": "function",
-                                "function": {
-                                    "name": tool.name,
-                                    "description": tool.description,
-                                    "parameters": tool.parameters
-                                }
-                            }]
-                            # Add only this function to available functions
-                            available_functions = {tool.name: tool.execute}
-                            self.logger.info(f"Using only the specified tool: {specific_tool}")
-                        else:
-                            self.logger.warning(f"Specified tool '{specific_tool}' not found, falling back to all tools")
-                            # Fall back to all tools if the specified one wasn't found
-                            available_tools = tools.get_available_tools()
-                            available_functions = tools.get_available_functions()
-                    else:
-                        # Get all available tools
-                        available_tools = tools.get_available_tools()
-                        available_functions = tools.get_available_functions()
-                    
+                    available_tools = tools.get_available_tools()
+                    available_functions = tools.get_available_functions()
                     self.logger.info(f"Retrieved {len(available_tools)} available tools")
                 except Exception as e:
                     self.logger.warning(f"Error getting tools: {str(e)}")
@@ -140,17 +115,7 @@ class LLMHandler:
                 
                 # Add tool usage instructions if tools are available AND include_tools is True
                 if include_tools and available_tools and 'tool_use_prompt' in self.config:
-                    # Get tools description
-                    if specific_tool:
-                        # If a specific tool is selected, only describe that one
-                        tool = tools.get_tool(specific_tool)
-                        if tool:
-                            tools_description = f"Available tool:\n- {tool.name}: {tool.description}\n  Parameters: {json.dumps(tool.parameters, indent=2)}"
-                        else:
-                            tools_description = tools.get_tools_description()
-                    else:
-                        # Otherwise get all tools description
-                        tools_description = tools.get_tools_description()
+                    tools_description = tools.get_tools_description()
                     
                     # Format and append the tool use instructions
                     tool_instructions = self.config['tool_use_prompt'].format(

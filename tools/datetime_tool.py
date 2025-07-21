@@ -17,7 +17,7 @@ class DateTimeTool(GenericTool):
     
     @property
     def description(self) -> str:
-        return "Get the current date and time for a specified location"
+        return "Get the current date and time for a specified location. Provides current time, today's date, what time is it now, current time in different cities and timezones around the world including Madrid, London, New York, Tokyo, etc."
     
     @property
     def parameters(self) -> Dict[str, Any]:

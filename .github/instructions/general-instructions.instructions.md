@@ -1,0 +1,11 @@
+---
+applyTo: '**'
+---
+- Always make a plan before starting to write code.
+- Write code that is easy to read and understand.
+- Use meaningful variable and function names.
+- Keep functions short and focused on a single task.
+- Write comments to explain complex logic or important decisions.
+- Use consistent indentation and formatting.
+- Ask the user before any changes
+- Focus on the fix/improvement reuqest. Do not change any other part of the code without asking theueser first

@@ -1,6 +1,10 @@
 import json
 import re
+import logging
 from typing import List, Dict, Any, Optional, Tuple
+
+# Get logger for this module
+logger = logging.getLogger('LLMUtilities')
 
 def format_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Format messages consistently for all backends"""
@@ -28,47 +32,6 @@ def format_messages(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     
     return formatted_messages
 
-def extract_tool_information(tools: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """
-    Extract comprehensive information about available tools
-    
-    Args:
-        tools: List of tool definitions
-        
-    Returns:
-        Dictionary mapping tool names to their information including description,
-        parameters, and extracted keywords
-    """
-    tool_info = {}
-    
-    for tool in tools:
-        if "function" in tool:
-            function = tool["function"]
-            name = function.get("name", "").lower()
-            
-            if name:
-                # Extract all relevant information about the tool
-                description = function.get("description", "")
-                parameters = function.get("parameters", {})
-                
-                # Extract keywords from the description
-                # This creates a more comprehensive set of keywords than the hardcoded approach
-                keywords = set()
-                if description:
-                    # Extract individual words, filtering out common stop words
-                    stop_words = {"a", "an", "the", "and", "or", "but", "if", "then", "is", "are", "in", "on", "at", "to", "for"}
-                    words = re.findall(r'\b\w+\b', description.lower())
-                    keywords.update([word for word in words if word not in stop_words and len(word) > 2])
-                
-                # Store all the information
-                tool_info[name] = {
-                    "description": description,
-                    "parameters": parameters,
-                    "keywords": list(keywords)
-                }
-    
-    return tool_info
-
 def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
     """
     Determine if tools should be used and which specific tool might be needed
@@ -84,11 +47,6 @@ def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]
     # Exit early if no tools are available
     if not tools or len(tools) == 0:
         return False, None
-    
-    # Extract comprehensive tool information
-    tool_info = extract_tool_information(tools)
-    if not tool_info:
-        return False, None
         
     # Get the latest user message
     latest_user_msg = ""
@@ -101,12 +59,9 @@ def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]
         return False, None
     
     # Direct tool mention check - if user explicitly mentions a tool by name
-    for tool_name in tool_info:
-        if tool_name in latest_user_msg:
-            return True, tool_name
-    
-    # Context-based matching by analyzing query intent and tool purposes
-    tools_scores = {}
+    for tool in tools:
+        if tool['function']['name'] in latest_user_msg:
+            return True, tool['function']['name']
     
     # These patterns suggest factual or dynamic information needs that tools could address
     info_seeking_patterns = [
@@ -123,141 +78,52 @@ def should_use_tools(messages: List[Dict[str, str]], tools: List[Dict[str, Any]]
     # Check if the message contains information-seeking patterns 
     contains_info_seeking = any(re.search(pattern, latest_user_msg) for pattern in info_seeking_patterns)
     
-    # Only proceed if the query seems to be seeking information
     if contains_info_seeking:
-        for tool_name, info in tool_info.items():
-            # Initial score based on keyword matches
-            base_score = 0
-            
-            # Check for keyword matches between message and tool info
-            for keyword in info["keywords"]:
-                if keyword in latest_user_msg:
-                    base_score += 1
-            
-            # Extract key parameters from the tool's schema if available
-            parameter_keywords = []
-            if "parameters" in info and isinstance(info["parameters"], dict):
-                properties = info["parameters"].get("properties", {})
-                for param_name, param_details in properties.items():
-                    # Add parameter names and descriptions to the keyword list
-                    parameter_keywords.append(param_name)
-                    if isinstance(param_details, dict) and "description" in param_details:
-                        # Extract keywords from parameter descriptions
-                        desc_words = re.findall(r'\b\w+\b', param_details["description"].lower())
-                        parameter_keywords.extend([w for w in desc_words if len(w) > 3])
-            
-            # Check for parameter matches
-            for keyword in parameter_keywords:
-                if keyword in latest_user_msg:
-                    base_score += 0.5  # Lower weight for parameter matches
-            
-            # Analyze tool name components for additional matches
-            name_parts = tool_name.replace('_', ' ').split()
-            for part in name_parts:
-                if part in latest_user_msg and len(part) > 3:  # Avoid matching short words
-                    base_score += 1.5  # Higher weight for tool name matches
-            
-            # Apply tool-specific enhancements based on common patterns
-            # This works for both built-in and custom tools with similar purposes
-            
-            # Weather-related tools
-            if "weather" in tool_name or "weather" in info["description"].lower():
-                weather_indicators = ["weather", "temperature", "forecast", "rain", "sunny", "hot", "cold", "humid"]
-                for indicator in weather_indicators:
-                    if indicator in latest_user_msg:
-                        base_score += 1.5
-                
-                # Locations often indicate weather requests
-                location_pattern = r"(?:in|at|for) ([A-Za-z\s]+)(?:\.|,|\?|$)"
-                if re.search(location_pattern, latest_user_msg):
-                    base_score += 1
-            
-            # Time/date-related tools
-            elif any(x in tool_name for x in ["time", "date", "calendar"]) or \
-                 any(x in info["description"].lower() for x in ["time", "date", "calendar"]):
-                time_indicators = ["time", "date", "day", "today", "current", "now"]
-                for indicator in time_indicators:
-                    if indicator in latest_user_msg:
-                        base_score += 1.5
-            
-            # Store the score for this tool
-            tools_scores[tool_name] = base_score
-    
-        # If we have any tools with a score above threshold
-        if tools_scores and max(tools_scores.values(), default=0) > 0:
-            # Get the tool with the highest score
-            best_tool = max(tools_scores.items(), key=lambda x: x[1])
-            
-            # Only use the tool if it has a minimum score (reduces false positives)
-            # Higher threshold for more confidence
-            if best_tool[1] >= 2:
-                return True, best_tool[0]
-            # If no tool is confident enough but query seems to need information
-            elif contains_info_seeking:
-                return True, None
+        return True, None
     
     # Default to not using tools
     return False, None
 
-def should_use_tools_vector(query: str, embedding_model, db_manager, similarity_threshold=0.75) -> Tuple[bool, Optional[str]]:
+def should_use_tools_vector(user_message: str, embedding_function, db_manager, similarity_threshold: float = 0.75) -> Tuple[bool, Optional[str]]:
     """
-    Determine if tools should be used based on vector similarity between query and tool descriptions
+    Determine if tools should be used and which specific tool might be needed
+    using vector embedding similarity matching.
     
     Args:
-        query: User's query text
-        embedding_model: SentenceTransformer model for generating query embedding (can be None)
-        db_manager: Database manager for retrieving similar tools
-        similarity_threshold: Threshold for considering a tool match (0.0 to 1.0)
+        user_message: The user's input message
+        embedding_function: Function to generate embeddings (can be None, will use default)
+        db_manager: Database manager instance for querying tool embeddings
+        similarity_threshold: Minimum similarity score to consider a tool match
         
     Returns:
         Tuple of (should_use, tool_name) where tool_name can be None if no specific tool is identified
     """
     try:
-        # Get logger for this function
-        import logging
-        logger = logging.getLogger('ToolSelector')
+        logger.info(f"Vector-based tool selection for query: {user_message[:50]}...")
         
-        logger.info(f"Analyzing query for tool selection: {query[:30]}...")
-        
-        # Generate embedding for the query
-        from memory_manager import get_embedding
-        query_embedding = get_embedding(query)
-        
-        # Find similar tools based on vector similarity
-        logger.info(f"Finding similar tools with similarity threshold {similarity_threshold}")
-        similar_tools = db_manager.find_similar_tools(
-            query_embedding=query_embedding,
-            similarity_threshold=similarity_threshold
-        )
-        
-        if similar_tools and len(similar_tools) > 0:
-            # Get the most similar tool and its similarity score
-            best_tool, description, similarity = similar_tools[0]
-            logger.info(f"Best tool match: {best_tool} (similarity: {similarity:.4f})")
-            
-            # Log more details about the top match
-            logger.debug(f"Tool description: {description[:100]}...")
-            
-            # Return the tool if similarity is above threshold
-            if similarity >= similarity_threshold:
-                logger.info(f"Selected tool '{best_tool}' with similarity {similarity:.4f}")
-                return True, best_tool
-            else:
-                # We found tools but they're not similar enough
-                logger.info(f"Best tool similarity {similarity:.4f} below threshold {similarity_threshold}")
-                return False, None
+        # Generate embedding for the user message
+        if embedding_function:
+            query_embedding = embedding_function(user_message)
         else:
-            # No similar tools found
-            logger.info("No similar tools found in database")
+            # Use the global embedding manager
+            from memory_manager import embedding_manager
+            query_embedding = embedding_manager.get_embedding(user_message)
+        
+        # Find the most similar tool using the database manager
+        similar_tool = db_manager.find_most_similar_tool(query_embedding, similarity_threshold)
+        
+        if similar_tool:
+            tool_name, similarity_score = similar_tool
+            logger.info(f"Found similar tool: {tool_name} with similarity {similarity_score:.3f}")
+            return True, tool_name
+        else:
+            logger.info(f"No tool found above similarity threshold {similarity_threshold}")
             return False, None
             
     except Exception as e:
-        import traceback
-        import logging
-        logger = logging.getLogger('ToolSelector')
-        logger.error(f"Error during tool selection: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        # Fall back to no tool use in case of error
+        logger.error(f"Error in vector-based tool selection: {str(e)}")
+        # Fall back to keyword-based detection
+        logger.info("Falling back to keyword-based tool detection")
         return False, None
 
 def extract_tool_calls_from_response(response_data: Dict[str, Any]) -> List[Dict[str, Any]]:

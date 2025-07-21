@@ -42,6 +42,13 @@ if __name__ == "__main__":
     logger = logging.getLogger('Funes')
     logger.info("Starting Funes server...")
     
+    # Initialize tools and ensure embeddings are ready
+    try:
+        import tools
+        logger.info(f"Tools initialized: {', '.join(tools.get_all_tools())}")
+    except Exception as e:
+        logger.error(f"Error initializing tools: {str(e)}", exc_info=True)
+    
     # Initialize and launch Gradio interface
     try:
         demo = setup_gradio()
